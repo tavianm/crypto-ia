@@ -1,0 +1,90 @@
+# Plan d'Implémentation du Projet Crypto-IA
+
+## Configuration de l'Environnement [TERMINÉ]
+
+- [x] Mise à jour des dépendances dans requirements.txt pour Python 3.11
+- [x] Installation et test des packages avec Python 3.11
+- [x] Configuration de l'environnement virtuel
+- [x] Test d'importation des bibliothèques
+
+## Implémentation des Agents [À FAIRE]
+
+1. MarketDataAgent
+
+   - [ ] Implémentation de la collecte de données via CCXT
+   - [ ] Normalisation des données dans models.MarketData
+   - [ ] Mise en place du cache Redis pour les données
+
+2. SentimentAnalysisAgent
+
+   - [ ] Intégration avec Ollama pour l'analyse de sentiment
+   - [ ] Configuration des modèles de langage légers
+   - [ ] Création des pipelines de traitement
+
+3. TechnicalAnalysisAgent
+
+   - [ ] Implémentation des indicateurs techniques avec ta et finta
+   - [ ] Création des signaux d'analyse technique
+   - [ ] Optimisation des calculs
+
+4. RiskManagementAgent
+
+   - [ ] Développement des modèles de gestion des risques
+   - [ ] Intégration des analyses de sentiment et technique
+   - [ ] Génération des models.Position
+
+5. ExecutionAgent
+   - [ ] Intégration avec FreqTrade
+   - [ ] Gestion des ordres et des positions
+   - [ ] Monitoring des exécutions
+
+## Infrastructure [À FAIRE]
+
+- [ ] Configuration de la base de données
+- [ ] Mise en place du monitoring avec Prometheus
+- [ ] Configuration des logs avec Loguru
+- [ ] Mise en place des métriques de performance
+
+## Tests et Validation [À FAIRE]
+
+- [ ] Écriture des tests unitaires
+- [ ] Tests d'intégration des agents
+- [ ] Tests de performance
+- [ ] Tests de charge
+
+## Documentation [À FAIRE]
+
+- [ ] Documentation de l'API
+- [ ] Guide d'installation
+- [ ] Documentation des agents
+- [ ] Exemples d'utilisation
+
+## CI/CD [À FAIRE]
+
+- [ ] Configuration de GitHub Actions
+- [ ] Mise en place des tests automatisés
+- [ ] Déploiement automatique
+- [ ] Gestion des versions
+
+## Optimisation [À FAIRE]
+
+- [ ] Optimisation des performances
+- [ ] Réduction de la consommation mémoire
+- [ ] Amélioration de la latence
+- [ ] Optimisation des requêtes API
+
+## Notes de Priorité
+
+1. Terminer la configuration de l'environnement
+2. Implémenter les agents de base
+3. Mettre en place les tests
+4. Développer l'infrastructure
+5. Optimiser les performances
+
+## Ressources Requises
+
+- Python 3.11
+- Redis (optionnel pour le cache)
+- Ollama pour les modèles de langage
+- FreqTrade pour l'exécution
+- Base de données (SQL/NoSQL selon les besoins)
