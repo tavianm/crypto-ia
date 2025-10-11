@@ -1,0 +1,55 @@
+# Configuration générale
+project:
+  name: crypto-ia
+  version: 0.1.0
+  log_level: INFO
+
+# Configuration des agents
+agents:
+  market_data:
+    update_interval: 60  # secondes
+    cache_duration: 300  # secondes
+    sources:
+      - binance
+      - coingecko
+  
+  sentiment:
+    model: phi:mini
+    update_interval: 900  # 15 minutes
+    sources:
+      - reddit
+      - twitter
+  
+  technical:
+    model: llama2:3
+    indicators:
+      - RSI
+      - MACD
+      - BB
+    timeframes:
+      - 1h
+      - 4h
+      - 1d
+  
+  risk:
+    model: mistral:7b
+    max_position_size: 1000  # USDT
+    max_open_positions: 3
+    risk_per_trade: 0.02  # 2%
+
+# Configuration FreqTrade
+freqtrade:
+  dry_run: true
+  stake_currency: USDT
+  stake_amount: 100
+  max_open_trades: 3
+  exchange:
+    name: binance
+    key: your_api_key
+    secret: your_api_secret
+
+# Configuration Redis (optionnel)
+redis:
+  host: localhost
+  port: 6379
+  db: 0
