@@ -1,0 +1,70 @@
+schema_version: "1.0"
+runtime: bun
+package_manager: bun
+backend:
+  framework: none
+  orm: none
+  path: src
+frontend:
+  framework: none
+  path: ""
+  ui_package: ""
+  ui_src: ""
+shared:
+  types: ""
+  ui: ""
+  config: src/config.ts
+build:
+  orchestrator: none
+  orchestrator_config: ""
+  formatter: biome
+  formatter_config: biome.json
+  formatter_fix_cmd: bun run format
+testing:
+  unit: bun
+  e2e: none
+hooks:
+  tool: lefthook
+lsp:
+  enabled: true
+  server: typescript-language-server
+deploy:
+  platform: none
+  secrets_cmd: ""
+release:
+  model: trunk
+  class: NONE
+  component: crypto-ia
+  version_files: [package.json]
+docs:
+  framework: none
+  path: docs
+  format: md
+commands:
+  dev: bun run dev
+  build: bun run build
+  test: bun run test
+  lint: bun run lint
+  typecheck: bun run typecheck
+  format: bun run format
+  install: bun install --frozen-lockfile
+  worktree_setup: bun run worktree:setup
+  worktree_teardown: bun run worktree:teardown
+artifacts:
+  brainstorms: artifacts/brainstorms
+  analyses: artifacts/analyses
+  specs: artifacts/specs
+  frames: artifacts/frames
+  plans: artifacts/plans
+standards:
+  backend: docs/standards/backend-patterns.md
+  frontend: docs/standards/frontend-patterns.md
+  testing: docs/standards/testing.md
+  code_review: docs/standards/code-review.md
+  architecture: docs/architecture/
+  configuration: docs/standards/configuration.md
+  deployment: docs/guides/deployment.md
+  troubleshooting: docs/guides/troubleshooting.md
+  issue_management: docs/processes/issue-management.md
+  dev_process: docs/processes/dev-process.md
+  contributing: docs/contributing.md

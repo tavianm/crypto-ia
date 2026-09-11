@@ -1,0 +1,10 @@
+# Regexes shared by the Bun wrapper and CI. Comments and blank lines are stripped.
+# Environment files deliberately remain in scope, including ignored .env files.
+(^|[\\/])node_modules([\\/]|$)
+(^|[\\/])\.venv([\\/]|$)
+(^|[\\/])dist([\\/]|$)
+(^|[\\/])build([\\/]|$)
+(^|[\\/])coverage([\\/]|$)
+(^|[\\/])\.turbo([\\/]|$)
+(^|[\\/])\.git([\\/]|$)
+(^|[\\/])\.tools([\\/]|$)

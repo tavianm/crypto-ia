@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.tools/
+.reports/
+reports/
+*.log
+*.gguf
+data/
+.DS_Store
+Thumbs.db
