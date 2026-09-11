@@ -38,11 +38,15 @@ accessible dans `PATH`. Les commandes Bun restent identiques.
 | --- | --- |
 | `bun run start` | Vérifie le mode shadow et affiche l'état du socle |
 | `bun run dev` | Relance cette vérification à chaque modification |
+| `bun run observe` | Observe un compte Kraken en lecture seule, ou rejoue des réponses enregistrées (`--replay <répertoire>`) |
 | `bun run check` | Format/lint, types, tests et build |
 | `bun run format` | Applique le format et les corrections Biome |
 | `bun run license:check` | Contrôle les licences des dépendances installées |
 | `bun run secrets:check` | Contrôle l'index Git avant commit |
 | `bun run commit` | Assistant Commitizen pour les commits conventionnels |
+
+`observe` s'exécute en mode shadow, comme le reste du socle : aucun ordre n'est passé.
+Les clés de lecture seule restent dans `.env`, jamais versionnées ; en replay, ni réseau ni clé.
 
 ## Documents
 
