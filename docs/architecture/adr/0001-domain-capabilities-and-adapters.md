@@ -114,9 +114,9 @@ Ces frontières sont logiques : le scaffold peut commencer comme un monorepo et 
 
 ### Anti-pattern signal
 
-Grep pattern: `ccxt|binance|openai|nats` in `packages/domain/src` et `packages/application/src`.
+Grep pattern: `ccxt|binance|openai|nats` in `src/domain` et `src/app`.
 
-Ces chemins sont des emplacements proposés pour le futur cœur métier ; si l'implémentation en retient d'autres, cette portée doit être mise à jour avec elle. Le motif est un signal de revue, pas une interdiction de ces mots dans la documentation ou les fixtures. Dans les sources du cœur, un import fournisseur ou une branche dédiée à un fournisseur indique une fuite de l'axe secondaire ; chaque résultat doit être qualifié.
+Ces chemins sont les sources du cœur métier depuis S1 ; si l'implémentation en retient d'autres, cette portée doit être mise à jour avec elle. Le motif est un signal de revue, pas une interdiction de ces mots dans la documentation ou les fixtures. Dans les sources du cœur, un import fournisseur ou une branche dédiée à un fournisseur indique une fuite de l'axe secondaire ; chaque résultat doit être qualifié.
 
 Autre signal à examiner en revue : une même correction de risque, allocation ou audit reproduite dans plusieurs adaptateurs. Un simple grep ne prouve pas l'absence de cette duplication.
 
