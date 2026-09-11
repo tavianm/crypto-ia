@@ -8,6 +8,7 @@ coverage/
 .reports/
 reports/
 .claude/worktrees/
+fixtures/__e2e-*.json
 *.log
 *.gguf
 data/
