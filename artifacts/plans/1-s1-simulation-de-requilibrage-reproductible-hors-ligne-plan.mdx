@@ -1,0 +1,353 @@
+---
+title: "Plan: S1 simulation de rééquilibrage reproductible hors ligne"
+issue: 1
+spec: artifacts/specs/1-s1-simulation-de-requilibrage-reproductible-hors-ligne-spec.mdx
+complexity: 6/10
+tier: F-full
+generated: "2026-09-11T18:00:00Z"
+---
+
+## Summary
+
+Première couche de domaine de crypto-ia : types financiers exacts (value objects entiers), valorisation, écart à une cible en bps, propositions simulées avec frais, journal versionné et rapport rejouable octet par octet. Domaine pur sans I/O ; la composition (`src/main.ts`) lit le fixture et affiche.
+
+## Architecture
+
+### Data Flow
+
+**Diagram :** sidecar `1-{slug}-data-flow.html` non généré (plugin forge absent ; à régénérer).
+
+fixture JSON → C1 (parse + fabriques D1, validation, refus typés) → `Snapshot`/`TargetAllocation`/`FeePolicy` → U1 : D2 valorisation → D3 poids/écarts bps → D4 propositions+frais → D5 journal → `Report` → R1 rendu canonique → stdout.
+
+### File x Function Map
+
+**Diagram :** sidecar `1-{slug}-file-map.html` non généré (plugin forge absent ; à régénérer).
+
+`src/domain/` : portfolio (types/fabriques), valuation, allocation, simulation, journal (empreintes FNV-1a), report (rendu canonique), index (barrel). `src/app/simulate-rebalance.ts` : U1. `src/main.ts` : C1+M1. `tests/` : un fichier par module + e2e. `fixtures/s1-synthetic-portfolio.json`.
+
+## Bootstrap Context
+
+Analyse #1 (approuvée) : Shape 1 « domaine en modules purs » retenue, en absorbant les champs d'identification du contrat d'événement (Shape 3) dans le journal. Décisions : value objects entiers (pas de `bigint` nu), prix en unités entières + `decimals` + devise de cote unique, aucune horloge murale, arrondi par troncature vers zéro, étiquetage `simulated`, zéro dépendance runtime. Références de style : `src/config.ts` (objets figés, messages d'erreur français sans valeurs), `tests/config.test.ts` (`bun:test`, `describe`/`test.each`).
+
+## Agents
+
+| Agent | Tasks | Files |
+|-------|-------|-------|
+| tester-A | T1, T2, RG-A | tests/domain/portfolio.test.ts, tests/fixtures.test.ts |
+| tester-B | T6, T7, T8, RG-B | tests/domain/{valuation,allocation,simulation}.test.ts |
+| tester-C | T12, T14, RG-C | tests/domain/journal.test.ts, tests/simulate-rebalance.test.ts |
+| tester-D | T13 | tests/domain/report.test.ts |
+| backend-dev-A | T3, T4 | src/domain/portfolio.ts, fixtures/s1-synthetic-portfolio.json |
+| backend-dev-B | T9, T10, T11 | src/domain/{valuation,allocation,simulation}.ts |
+| backend-dev-C | T15, T16, T17 | src/domain/{journal,report,index}.ts |
+| backend-dev-D | T18, T19 | src/app/simulate-rebalance.ts, src/main.ts |
+| backend-dev-E | T5 | src/main.ts (chargement fixture) |
+| doc-writer-A | T21 | docs/architecture/adr/0001 (portée grep) |
+
+## Wave Structure
+
+8 vagues, max 6 agents parallèles. Écoulement ~8 vagues (≈45 min d'agents) vs ~21 tâches séquentielles (≈105 min).
+
+| Wave | Trigger | Agents | Tasks |
+|------|---------|--------|-------|
+| 1 | start | 6 ∥ | tester-A: T1,T2 · tester-B: T6,T7,T8 · tester-C: T12,T14 · tester-D: T13 · backend-dev-A: T4 · doc-writer-A: T21 |
+| 2 | Wave 1 (RED SL-A) fait | 1 | backend-dev-A: T3 |
+| 3 | Wave 2 fait | 3 ∥ | backend-dev-E: T5 · backend-dev-B: T9 · backend-dev-C: T15 |
+| 4 | Wave 3 fait | 1 | backend-dev-B: T10 |
+| 5 | Wave 4 fait | 1 | backend-dev-B: T11 |
+| 6 | Wave 5 fait | 1 | backend-dev-C: T16 |
+| 7 | Wave 6 fait | 2 ∥ | backend-dev-C: T17 · backend-dev-D: T18 |
+| 8 | Wave 7 fait | 1 | backend-dev-D: T19 |
+
+Sentinelles RED-GATE : RG-A (← T1,T2), RG-B (← T6,T7,T8), RG-C (← T12,T13,T14) — marquées dès que leurs tâches RED sont terminées ; les vérifications `deferred` des tâches GREEN de la slice sont validées après leur sentinelle.
+
+### Budget — per task
+
+| Task | Items | Class | Est. ops | Split? |
+|------|-------|-------|----------|--------|
+| T1, T6–T8, T12–T14 (RED) | 7 | bounded | 2–3 chacun | — |
+| T2 (fixture test) | 1 | bounded | 3 | — |
+| T3 (portfolio types) | 1 | judgmental | 6 | — |
+| T4 (fixture) | 1 | judgmental | 5 | — |
+| T5 (loader) | 1 | judgmental | 5 | — |
+| T9–T11, T15, T16 (modules) | 5 | judgmental | 5–6 chacun | — |
+| T17 (barrel) | 1 | trivial | 2 | — |
+| T18–T19 (orchestration/CLI) | 2 | judgmental | 5–6 chacun | — |
+| T21 (ADR grep scope) | 1 | trivial | 2 | — |
+
+**Total estimated ops : ~85**
+
+### Budget — per agent instance
+
+Caps : `Σ ops > 50` OU `|tâches| > 4` OU `sujets distincts > 2` → scinder.
+
+| Instance | Tasks | Σ ops | Subjects | Split? |
+|----------|-------|-------|----------|--------|
+| tester-A | T1, T2 | 5 | validation, fixture | — |
+| tester-B | T6, T7, T8 | 9 | calc | — |
+| tester-C | T12, T14 | 6 | determinism, orchestration | — |
+| tester-D | T13 | 3 | render | — |
+| backend-dev-A | T3, T4 | 11 | amounts, fixture | — |
+| backend-dev-B | T9, T10, T11 | 16 | calc | — |
+| backend-dev-C | T15, T16, T17 | 13 | serialization, barrel | — |
+| backend-dev-D | T18, T19 | 11 | orchestration, composition | — |
+| backend-dev-E | T5 | 5 | parsing | — |
+| doc-writer-A | T21 | 2 | docs | — |
+
+## Consistency Report
+
+- Criteria covered : 12/12 (SC1→T14, SC2→T14, SC3→T1+T6, SC4→T1, SC5→T1+T6, SC6→T1, SC7→T12+T15, SC8→T13+T16, SC9→T7+T11, SC10→T7+T8, SC11→T14, SC12→T19+gate globale)
+- Uncovered criteria : none
+- Tasks without spec backing : T17 (exemption infra : barrel), T21 (exemption docs : décision d'analyse 7, mise à jour de portée prévue par l'ADR)
+- Gold plating exemptions applied : 2
+
+## Micro-Tasks
+
+### Slice SL-A : Types et validation
+
+#### Task 1: Écrire les tests RED des fabriques et refus de portfolio → tester-A
+- **File:** `tests/domain/portfolio.test.ts`
+- **Snippet:** `describe('portfolio fabriques', () => { test('refuse un prix coté hors devise', ...) })` — cas : fabriques Amount/Price/Snapshot/Holding, MissingPriceError (détenu ou ciblé), MissingFieldError, QuoteMismatchError, MixedQuoteCurrencyError, ScaleMismatchError, poids ≠ 10000 bps
+- **Verify:** `grep -q 'MixedQuoteCurrencyError' tests/domain/portfolio.test.ts` (ready)
+- **Expected:** structure de tests présente (échouent avant implémentation)
+- **Time:** 8 min | **Difficulty:** 3
+- **Traces:** SC3, SC4, SC5, SC6, SC9 | **Phase:** RED
+
+#### Task 2: Écrire le test RED de validité du fixture → tester-A
+- **File:** `tests/fixtures.test.ts`
+- **Snippet:** `test('le fixture S1 se charge en Snapshot valide', ...)` — lit `fixtures/s1-synthetic-portfolio.json`, passe les fabriques D1
+- **Verify:** `grep -q 's1-synthetic-portfolio' tests/fixtures.test.ts` (ready)
+- **Expected:** test présent (échoue tant que F1/T3 manquent)
+- **Time:** 3 min | **Difficulty:** 2
+- **Traces:** F1, SC4 | **Phase:** RED
+
+#### RED-GATE: RED complete SL-A → tester-A
+- **Verify:** T1, T2 terminées | **Phase:** RED-GATE
+
+#### Task 3: Implémenter les types et fabriques de portfolio → backend-dev-A
+- **File:** `src/domain/portfolio.ts`
+- **Snippet:** `export interface AssetMeta { readonly code: AssetCode; readonly decimals: number; readonly quoteCurrency: AssetCode }` + fabriques validées + erreurs typées
+- **Verify:** `bun run typecheck` (ready) puis `bun test tests/domain/portfolio.test.ts` (deferred → RG-A)
+- **Expected:** tous les tests RED de T1 passent
+- **Time:** 8 min | **Difficulty:** 4
+- **Traces:** SC3–SC6, SC9, SC10 | **Phase:** GREEN
+
+#### Task 4: Créer le fixture synthétique versionné → backend-dev-A [P]
+- **File:** `fixtures/s1-synthetic-portfolio.json`
+- **Snippet:** `{ "assets": [...], "snapshot": { "observedAt": "...", "holdings": [...], "prices": [...] }, "targetAllocation": {...}, "feePolicy": {...} }` — montants/prix en chaînes entières, devise de cote unique
+- **Verify:** `test -f fixtures/s1-synthetic-portfolio.json` (ready)
+- **Expected:** fichier présent, chargé avec succès par T2 après T3
+- **Time:** 5 min | **Difficulty:** 2
+- **Traces:** F1 | **Phase:** GREEN
+
+#### Task 5: Implémenter le chargement du fixture dans la composition → backend-dev-E
+- **File:** `src/main.ts`
+- **Snippet:** `function loadInput(path: string): { snapshot: Snapshot; target: TargetAllocation; fees: FeePolicy }` — lecture fs + fabriques + `--input`
+- **Verify:** `bun run typecheck` (deferred → T3, T4)
+- **Expected:** le fixture par défaut se charge, refus typés sur jeu invalide
+- **Time:** 5 min | **Difficulty:** 3
+- **Traces:** C1, M1 | **Phase:** GREEN
+
+### Slice SL-B : Valorisation, écart, propositions
+
+#### Task 6: Écrire les tests RED de valorisation → tester-B
+- **File:** `tests/domain/valuation.test.ts`
+- **Snippet:** `test('valorise en devise de cote unique', ...)` — somme entière, devises mélangées refusées
+- **Verify:** `grep -q 'valor' tests/domain/valuation.test.ts` (ready)
+- **Time:** 4 min | **Difficulty:** 3
+- **Traces:** SC5, SC6 | **Phase:** RED
+
+#### Task 7: Écrire les tests RED d'allocation → tester-B
+- **File:** `tests/domain/allocation.test.ts`
+- **Snippet:** `test('calcule poids courants/cibles et écart en bps', ...)` — snapshot vide → 0 bps, somme ≠ 10000 refusée
+- **Verify:** `grep -q 'bps' tests/domain/allocation.test.ts` (ready)
+- **Time:** 4 min | **Difficulty:** 3
+- **Traces:** SC9, SC10 | **Phase:** RED
+
+#### Task 8: Écrire les tests RED de simulation → tester-B
+- **File:** `tests/domain/simulation.test.ts`
+- **Snippet:** `test('tronque les deltas vers zéro et journalise la poussière', ...)` — formule de frais `troncature(|deltaValue| × bps ÷ 10000)`
+- **Verify:** `grep -q 'estimatedFee' tests/domain/simulation.test.ts` (ready)
+- **Time:** 5 min | **Difficulty:** 3
+- **Traces:** SC8, SC10 | **Phase:** RED
+
+#### RED-GATE: RED complete SL-B → tester-B
+- **Verify:** T6, T7, T8 terminées | **Phase:** RED-GATE
+
+#### Task 9: Implémenter la valorisation → backend-dev-B
+- **File:** `src/domain/valuation.ts`
+- **Snippet:** `export function valueSnapshot(snapshot: Snapshot): bigint` — arithmétique entière, devise unique
+- **Verify:** `bun test tests/domain/valuation.test.ts` (deferred)
+- **Time:** 5 min | **Difficulty:** 4 | **Traces:** SC5, SC6 | **Phase:** GREEN
+
+#### Task 10: Implémenter l'allocation et les écarts → backend-dev-B
+- **File:** `src/domain/allocation.ts`
+- **Snippet:** `export function computeDeviations(snapshot, target): Deviation[]` — bps entiers, poids courants 0 si vide
+- **Verify:** `bun test tests/domain/allocation.test.ts` (deferred)
+- **Time:** 5 min | **Difficulty:** 4 | **Traces:** SC9, SC10 | **Phase:** GREEN
+
+#### Task 11: Implémenter la simulation des propositions → backend-dev-B
+- **File:** `src/domain/simulation.ts`
+- **Snippet:** `export function simulate(deviations, prices, fees): { proposals: Proposal[]; dust: DustEntry[] }` — troncature vers zéro, frais en entier
+- **Verify:** `bun test tests/domain/simulation.test.ts` (deferred)
+- **Time:** 6 min | **Difficulty:** 4 | **Traces:** SC8, SC10 | **Phase:** GREEN
+
+### Slice SL-C : Journal, rapport, CLI, rejeu
+
+#### Task 12: Écrire les tests RED du journal → tester-C
+- **File:** `tests/domain/journal.test.ts`
+- **Snippet:** `test('id FNV-1a reproductible calculé hors id', ...)` — kinds simulation/rejection, empreintes, champs obligatoires
+- **Verify:** `grep -q 'inputFingerprint' tests/domain/journal.test.ts` (ready)
+- **Time:** 5 min | **Difficulty:** 3
+- **Traces:** SC7 | **Phase:** RED
+
+#### Task 13: Écrire les tests RED du rendu de rapport → tester-D
+- **File:** `tests/domain/report.test.ts`
+- **Snippet:** `test('rend un JSON canonique identique octet par octet', ...)` — clés triées, montants en chaînes, bans `Intl`/`toLocaleString`
+- **Verify:** `grep -q 'canonique' tests/domain/report.test.ts` (ready)
+- **Time:** 4 min | **Difficulty:** 3
+- **Traces:** SC1, SC8 | **Phase:** RED
+
+#### Task 14: Écrire les tests RED e2e et la garde statique d'imports → tester-C
+- **File:** `tests/simulate-rebalance.test.ts`
+- **Snippet:** `test('deux exécutions CLI produisent un stdout identique', ...)` + test grep (node:http/fs/child_process, fetch(, spawn(, process.env, Bun.env, Intl, toLocaleString dans src/domain et src/app)
+- **Verify:** `grep -q 'Bun.spawn' tests/simulate-rebalance.test.ts` (ready)
+- **Time:** 6 min | **Difficulty:** 4
+- **Traces:** SC1, SC2, SC11 | **Phase:** RED
+
+#### RED-GATE: RED complete SL-C → tester-C
+- **Verify:** T12, T13, T14 terminées | **Phase:** RED-GATE
+
+#### Task 15: Implémenter le journal → backend-dev-C
+- **File:** `src/domain/journal.ts`
+- **Snippet:** `export function fnv1a64(input: string): bigint` + `createSimulationEntry` / `createRejectionEntry`
+- **Verify:** `bun test tests/domain/journal.test.ts` (deferred)
+- **Time:** 6 min | **Difficulty:** 4 | **Traces:** SC7 | **Phase:** GREEN
+
+#### Task 16: Implémenter le rapport et son rendu → backend-dev-C
+- **File:** `src/domain/report.ts`
+- **Snippet:** `export function renderReport(report: Report): string` — JSON canonique + résumé texte, montants en chaînes
+- **Verify:** `bun test tests/domain/report.test.ts` (deferred)
+- **Time:** 6 min | **Difficulty:** 4 | **Traces:** SC1, SC8 | **Phase:** GREEN
+
+#### Task 17: Créer le barrel du domaine → backend-dev-C
+- **File:** `src/domain/index.ts`
+- **Snippet:** `export * from './portfolio.ts'` … (uniquement l'API publique)
+- **Verify:** `bun run typecheck` (deferred → T15, T16)
+- **Time:** 2 min | **Difficulty:** 1 | **Traces:** (exemption infra) | **Phase:** GREEN
+
+#### Task 18: Implémenter le cas d'usage simulateRebalance → backend-dev-D
+- **File:** `src/app/simulate-rebalance.ts`
+- **Snippet:** `export function simulateRebalance(input): Report` — enchaîne D2→D3→D4→D5, journalise les refus
+- **Verify:** `bun test tests/simulate-rebalance.test.ts` (deferred → RG-C)
+- **Time:** 6 min | **Difficulty:** 4 | **Traces:** U1, SC1, SC7 | **Phase:** GREEN
+
+#### Task 19: Câbler la CLI one-shot → backend-dev-D
+- **File:** `src/main.ts`
+- **Snippet:** `const input = loadInput(path); const report = simulateRebalance(input); console.log(renderReport(report))` — remplace l'affichage scaffold, statut shadow conservé ; `src/config.ts` inchangé
+- **Verify:** `bun test tests/simulate-rebalance.test.ts` (deferred) puis `bun run check` (deferred → T18)
+- **Time:** 4 min | **Difficulty:** 3 | **Traces:** M1, SC2, SC12 | **Phase:** GREEN
+
+#### Task 21: Mettre à jour la portée du grep anti-pattern dans l'ADR → doc-writer-A [P]
+- **File:** `docs/architecture/adr/0001-domain-capabilities-and-adapters.md`
+- **Snippet:** section Anti-pattern signal : `src/domain` et `src/app` remplacent `packages/domain/src` et `packages/application/src`
+- **Verify:** `grep -q 'src/domain' docs/architecture/adr/0001-domain-capabilities-and-adapters.md` (ready)
+- **Time:** 2 min | **Difficulty:** 1
+- **Traces:** décision d'analyse 7 | **Phase:** GREEN
+
+> T20 non allouée : la garde statique est couverte par T14 (éviter les trous de numérotation dans les références croisées).
+
+## Task Seeding Blueprint
+
+<!-- Used by /implement to seed TaskCreate calls on session start.
+     Format: T{n} | agent-instance | blockedBy | subject -->
+
+### Wave 1 — no deps, 6 agents ∥
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T1 | tester-A | — | validation |
+| T2 | tester-A | — | fixture |
+| T4 | backend-dev-A | — | fixture |
+| T6 | tester-B | — | calc |
+| T7 | tester-B | — | calc |
+| T8 | tester-B | — | calc |
+| T12 | tester-C | — | determinism |
+| T13 | tester-D | — | render |
+| T14 | tester-C | — | orchestration |
+| T21 | doc-writer-A | — | docs |
+
+### Wave 2 — after Wave 1 RED SL-A
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| RG-A | tester-A | T1,T2 | gate |
+| T3 | backend-dev-A | T1 | amounts |
+
+### Wave 3 — after Wave 2
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T5 | backend-dev-E | T3,T4 | parsing |
+| T9 | backend-dev-B | T3,T6 | calc |
+| T15 | backend-dev-C | T3,T12 | serialization |
+| RG-B | tester-B | T6,T7,T8 | gate |
+
+### Wave 4 — after Wave 3
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T10 | backend-dev-B | T9,T7 | calc |
+
+### Wave 5 — after Wave 4
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T11 | backend-dev-B | T10,T8 | calc |
+
+### Wave 6 — after Wave 5
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T16 | backend-dev-C | T9,T10,T11,T13 | serialization |
+
+### Wave 7 — after Wave 6
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T17 | backend-dev-C | T15,T16 | barrel |
+| T18 | backend-dev-D | T15,T16 | orchestration |
+| RG-C | tester-C | T12,T13,T14 | gate |
+
+### Wave 8 — after Wave 7
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T19 | backend-dev-D | T5,T18 | composition |
+
+## Task IDs
+
+<!-- Generated by /plan. IDs canoniques T{n}/RG-* (stables, définis par le Task Seeding Blueprint ci-dessus).
+     Le harnais de session ne fournit pas d'IDs persistants : /implement re-seed les tâches depuis
+     le blueprint au démarrage de session (après /compact) et les ré-attache via ce tableau. -->
+- T1: seed-from-blueprint — validation
+- T2: seed-from-blueprint — fixture
+- T3: seed-from-blueprint — amounts
+- T4: seed-from-blueprint — fixture
+- T5: seed-from-blueprint — parsing
+- T6: seed-from-blueprint — calc
+- T7: seed-from-blueprint — calc
+- T8: seed-from-blueprint — calc
+- T9: seed-from-blueprint — calc
+- T10: seed-from-blueprint — calc
+- T11: seed-from-blueprint — calc
+- T12: seed-from-blueprint — determinism
+- T13: seed-from-blueprint — render
+- T14: seed-from-blueprint — orchestration
+- T15: seed-from-blueprint — serialization
+- T16: seed-from-blueprint — serialization
+- T17: seed-from-blueprint — barrel
+- T18: seed-from-blueprint — orchestration
+- T19: seed-from-blueprint — composition
+- T21: seed-from-blueprint — docs
+- RG-A/RG-B/RG-C: seed-from-blueprint — gate
