@@ -1,0 +1,55 @@
+---
+title: "S1 : simulation de rééquilibrage reproductible hors ligne"
+issue: 1
+status: approved
+tier: F-full
+date: 2026-09-11
+---
+
+## Problem
+
+Le socle (S0) démarre en `shadow` mais ne calcule rien : aucune valorisation, aucune allocation cible, aucun journal. La roadmap (`docs/roadmap.md`, S1) fixe la première capacité utile : produire une **simulation reproductible hors ligne** de la boucle observation → proposition de rééquilibrage, sans connexion externe. C'est le premier code de domaine du dépôt : il établit les conventions (types, montants exacts, journal versionné) que S2 (ingestion read-only) et les règles de risque réutiliseront.
+
+L'impact est observable : sans S1, impossible de vérifier une proposition de rééquilibrage de bout en bout, ni de rejouer un résultat à l'identique — donc aucune base de confiance avant tout branchement réel.
+
+## Who
+
+- **Primary :** l'opérateur du dépôt (usage unique) qui veut des propositions simulées vérifiables à la main, rejouables à l'identique, avant toute donnée de compte réelle.
+- **Secondary :** les futures tranches (S2 ingestion, règles de risque, explications) qui consomment les mêmes types, le même journal et les mêmes conventions de test ; les revues qui vérifient le déterminisme.
+
+## Constraints
+
+- Hors ligne strict : aucun réseau, compte d'exchange, modèle LLM ni credential, en exécution comme en test (`docs/standards/testing.md`).
+- Shadow : aucun chemin d'ordre réel, y compris via variable d'environnement ; sorties étiquetées « simulées » et distinguables des futurs événements d'exécution (ADR-0001).
+- Montants en décimaux exacts ou unités entières explicites ; pas de flottants sans contrat de précision (`docs/standards/backend-patterns.md`).
+- Journal : entrées, version des règles, refus et résultats ; rejeu déterministe ; les erreurs d'unité et données manquantes sont refusées explicitement, jamais silencieusement.
+- Frontières ADR-0001 : capacités métier (état portefeuille, valorisation, simulation, journal) sans SDK fournisseur ni transport dans le cœur.
+- Frais : hypothèses explicites et configurées, pas de chiffres implicites.
+- Qualité : `bun run check`, `bun run license:check`, `bun run secrets:check --all` avant commit ; tests `bun:test` déterministes.
+
+## Out of Scope
+
+- Connexion à un exchange réel, clés API, ingestion réseau, WebSockets (S2).
+- LLM local ou cloud, explications en langage naturel (S3/S5).
+- Bus NATS, adaptateur factory, service permanent, supervision (S4).
+- Exécution d'ordres, mode semi-automatique, validation humaine, UI (S6/S7).
+- Métriques de performance financière (volatilité, Sharpe, backtest) : la simulation S1 produit des propositions et leurs frais estimés, pas une preuve de performance.
+- Multi-exchange, multi-compte, classes d'actifs hors spot crypto.
+
+## Premise Validity
+
+Dérivé des documents d'intention du projet (roadmap, ADR-0001, overview) — mode autonome, révisable à l'approbation.
+
+**Success in 6 months :** la boucle S1 est fusionnée et utilisée : rejouer le même jeu synthétique produit un rapport identique, et S2 (observation read-only) démarre en consommant les mêmes types et le même journal — S1+S2 opérationnelles en shadow.
+
+**Failure in 6 months :** à six mois, S1 n'est pas fusionnée ; ou deux exécutions du même snapshot produisent des rapports divergents (non-déterminisme) ; ou des données manquantes / erreurs d'unité passent sans refus explicite. Conditions observables et tranchables.
+
+**Simplest alternative :** un script ponctuel (ou feuille de calcul) recalculant l'écart à une allocation cible depuis un export CSV manuel.
+
+**Why not simplest :** pas de rejeu déterministe versionné, pas de tests des frontières (unités, données manquantes), pas de journal auditable, aucun socle de types réutilisable pour S2 et les règles de risque — chaque mise à jour resterait un one-shot invérifiable.
+
+## Complexity
+
+**Tier: F-full** — première couche de domaine du dépôt, plusieurs capacités (état portefeuille, valorisation, simulation, journal), nouveaux patterns (montants exacts, contrats d'événement, journal versionné).
+
+Signals : multiple domains, new patterns, premier code de domaine dont les conventions sont réutilisées par toutes les tranches suivantes ; issue sans label de taille, périmètre clair mais unknowns de conception (représentation des décimaux, forme du journal).

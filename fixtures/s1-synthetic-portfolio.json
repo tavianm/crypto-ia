@@ -1,0 +1,29 @@
+{
+  "assets": [
+    { "code": "BTC", "decimals": 8, "quoteCurrency": "USDT" },
+    { "code": "ETH", "decimals": 18, "quoteCurrency": "USDT" },
+    { "code": "SOL", "decimals": 9, "quoteCurrency": "USDT" }
+  ],
+  "snapshot": {
+    "observedAt": "2026-09-11T00:00:00Z",
+    "holdings": [
+      { "asset": "BTC", "units": "125000000" },
+      { "asset": "ETH", "units": "8000000000000000000" },
+      { "asset": "SOL", "units": "100000000000" }
+    ],
+    "prices": [
+      { "asset": "BTC", "quote": "USDT", "units": "27185000", "decimals": 2 },
+      { "asset": "ETH", "quote": "USDT", "units": "431250", "decimals": 2 },
+      { "asset": "SOL", "quote": "USDT", "units": "20875", "decimals": 2 }
+    ]
+  },
+  "targetAllocation": {
+    "policyVersion": "s1-target-1",
+    "weights": [
+      { "asset": "BTC", "weightBps": 5000 },
+      { "asset": "ETH", "weightBps": 3500 },
+      { "asset": "SOL", "weightBps": 1500 }
+    ]
+  },
+  "feePolicy": { "policyVersion": "s1-fees-1", "bpsPerTrade": 10 }
+}

@@ -1,0 +1,12 @@
+{
+  "assets": [
+    { "code": "BTC", "decimals": 8, "quoteCurrency": "USDT" },
+    { "code": "SOL", "decimals": 9, "quoteCurrency": "USDT" }
+  ],
+  "snapshot": {
+    "holdings": [{ "asset": "BTC", "units": "100000000" }],
+    "prices": [{ "asset": "BTC", "quote": "USDT", "units": "27185000", "decimals": 2 }],
+    "observedAt": "2026-09-11T00:00:00Z"
+  },
+  "feePolicy": { "policyVersion": "s1-fees-1", "bpsPerTrade": 10 }
+}
