@@ -1,0 +1,131 @@
+---
+title: "Analyse S2 : observer un compte spot en lecture seule (issue #3)"
+description: "Port de portefeuille + connecteur Kraken natif testé sur réponses enregistrées anonymisées, comparaison positions réelles ↔ valorisation S1."
+---
+
+## Source
+
+Issue #3 « S2 : observer un compte spot en lecture seule », dérivée de la roadmap (S2) : « Définir puis tester un connecteur de lecture sur des réponses enregistrées : limites de débit, reprise après interruption, pagination et horodatage. » Frame approuvée du 2026-09-11 : Kraken, USDT, BTC/ETH/SOL, observation à la demande.
+
+## Problem
+
+La simulation S1 ne consomme que des fixtures synthétiques : aucune comparaison n'est possible entre la valorisation calculée et un état réel. Le premier pont vers la réalité manque : un port de lecture du portefeuille, un connecteur vers un exchange réel (Kraken), et une CLI d'observation qui confronte positions réelles et calcul S1. Sans elle, ni fraîcheur visible, ni détection d'écart, ni base pour S3/S4.
+
+## Outcome
+
+Lancer une commande produit un instantané des positions spot Kraken (BTC/ETH/SOL valorisés en USDT, devise de cote), horodaté, confronté à la valorisation calculée par le domaine S1 ; les écarts de position sont visibles dans le rapport et journalisés. La même réponse enregistrée rejoue à l'identique. Les tests n'appellent jamais Kraken. Ni secrets ni données de compte n'apparaissent dans les logs, les fixtures versionnés ou le dépôt. Aucun code ne peut passer d'ordre, structurellement : l'adaptateur n'expose qu'une méthode de lecture par endpoint, pas de requête privée générique.
+
+## Appetite
+
+Un cycle comparable à S1 : cadrage → analyse → spec → plan → implémentation par vagues d'agents (~1 journée), tests et build au vert avant PR.
+
+## Vérification des interfaces externes (fait le 2026-09-11)
+
+Sources officielles consultées — le périmètre ci-dessous s'appuie sur des interfaces vérifiées, pas sur le plan cible seul :
+
+- **Endpoint de soldes :** `POST https://api.kraken.com/0/private/Balance` ; en-têtes `API-Key` + `API-Sign`, où `API-Sign = HMAC-SHA512(clé = base64decode(secret), message = chemin_URI + SHA256(nonce + corps_POST))` ; nonce int64 strictement croissant par clé ; permission suffisante « Funds permissions — Query » (clé strictement lecture seule possible) ; réponse `{ "error": [], "result": { "<asset>": "<solde en chaîne>" } }` — carte ouverte, soldes en chaînes décimales, **pas de pagination**, **pas de filtre d'actifs** et **pas d'horodatage** dans la réponse.
+- **Codes d'actifs Kraken :** préfixés à la Kraken (`XXBT`, `XETH`, `ZUSD`…) avec variantes de suffixe (`.B`, `.F`, `.T`, `.S`, `.M`) ; l'UI dit « BTC », l'API dit `XBT`. Un compte réel contient presque toujours des actifs hors cibles (`ZUSD`, poussière, soldes stakés `.S`) : la traduction doit tolérer ce cas, pas seulement le refuser (politique ci-dessous).
+- **Paires USDT :** l'existence de XBT/USDT et ETH/USDT sur Kraken spot est documentée ; SOL/USDT est documentée mais à confirmer à la première capture réelle (repli documenté dans les concerns). Les prix proviennent de l'endpoint public Ticker (sans authentification), valeurs en chaînes à précision décimale fixe.
+- **Limites de débit :** compteurs par tier, privés et publics séparés ; à la fréquence « à la demande », aucun risque de saturation, mais le client doit refuser proprement en cas d'erreur `EAPI:Rate limit`.
+
+## Shapes
+
+**Diagram :** sidecar `3-{slug}-shapes.html` non généré (plugin forge absent, même statut que S1 ; à régénérer).
+
+### Shape 1 : port de portefeuille + connecteur Kraken natif (adaptateur fin)
+
+Un port `PortfolioSource` (contrat de couche applicative, au sens de l'ADR-0001 règle 2 : les cas d'usage définissent les ports ; il dépend des types du domaine `Snapshot`/`Monetary` sans en faire partie), défini dans `src/ports/` et implémenté par un adaptateur `src/adapters/kraken/` : client HTTP `fetch` natif Bun, signature HMAC-SHA512 via WebCrypto (zéro dépendance), traduction des codes d'actifs et normalisation des décimales, prix via Ticker public. Le client n'expose que des méthodes explicites par endpoint (`fetchBalance`, `fetchTicker`) — aucune requête privée générique, pour rendre structurellement impossible l'ajout d'un endpoint d'ordre sans évolution dédiée. Le nonce et l'horloge sont des fournisseurs injectés. La CLI d'observation (`src/app/observe-portfolio.ts`) compose port → snapshot domaine → valorisation S1 → comparaison. Le transport est injecté endpoint par endpoint : les tests rejouent des réponses enregistrées anonymisées dans `fixtures/kraken/`.
+
+**Politique des codes d'actifs (à trancher précisément en spec) :** deux niveaux — soldes nuls ignorés ; actifs non cibles non nuls signalés dans le rapport comme « non suivis » sans bloquer l'observation ; refus typé réservé aux codes Kraken attendus mal formés. Un refus systématique de tout code inconnu ferait échouer la CLI dès la première capture réelle (tout compte contient d'autres devises).
+
+**Trade-offs :**
+- Pro : conforme ADR-0001 (port défini par le cas d'usage, adaptateur isolé, domaine pur) ; zéro dépendance runtime (continuité S1) ; surface d'API minimale (Balance privé + Ticker public) ; traduction XBT explicite et testable ; chemin d'ordre structurellement absent ; rejouabilité par transport, nonce et horloge injectés.
+- Con : signature HMAC + nonce écrites et testées maison (vecteurs deterministes requis, incluant le SHA-256 interne et le décodage base64 de la clé) ; gestion manuelle des erreurs Kraken (`error[]`, rate limit) et des codes suffixés ; responsabilité de fidélité sur nous (la prémisse d'échec l'assume).
+
+**Rough scope :** M
+
+### Shape 2 : SDK Kraken tierce TypeScript
+
+Un SDK communautaire gère auth et appels ; notre port reste au-dessus.
+
+**Trade-offs :**
+- Pro : moins de code d'authentification maison ; la bibliothèque éprouvée reste le repli prévu par la prémisse d'échec.
+- Con : dépendance runtime externe (contre la convention zéro dépendance) ; qualité et maintenance variables ; surface supply-chain au contact des clés API ; évaluation version/licence imposée par AGENTS.md avant adoption.
+
+**Rough scope :** M
+
+### Shape 3 : export manuel (CSV/JSON Kraken) → CLI
+
+Aucun connecteur : la CLI lit un export de positions téléchargé manuellement.
+
+**Trade-offs :**
+- Pro : aucune authentification, aucune clé, livraison immédiate.
+- Con : pas de fraîcheur ni d'horodatage fiable, non automatisé, source d'erreurs de saisie ; ne prépare ni S3 ni S4 — c'est l'alternative la plus simple déjà rejetée par la prémisse de la frame.
+
+**Rough scope :** S
+
+## Fit Check
+
+**Diagram :** sidecar `3-{slug}-data-flow.html` non généré (plugin forge absent ; à régénérer).
+
+**Shape 1 retenue.** Elle satisfait simultanément : ADR-0001 (port défini par le cas d'usage, adaptateur isolé, domaine pur conservé), contrainte zéro dépendance runtime (fetch + WebCrypto natifs Bun), critère d'acceptation « réponses enregistrées » (transport injecté → fixtures rejouables), et l'horodatage de fraîcheur. La prémisse d'échec falsifiable (écart non signalé ou secret divulgué) est adressée par la politique en deux niveaux des codes d'actifs et par l'expurgation systématique des journaux.
+
+**Conditions du rejeu à l'identique (à porter en exigence de spec) :** la réponse `Balance` ne contenant pas d'horodatage, `observedAt` est gelé dans le fixture enregistré (ou fourni par une horloge injectée en test) ; le nonce est un fournisseur injecté ; un run de replay ne dépend donc ni de l'horloge murale ni du réseau.
+
+**Exigences issues des critères d'acceptation (à porter en spec) :**
+- *Interruption/répétition sans altération* : en cas d'échec réseau entre Balance et Ticker, le run ne produit jamais un snapshot silencieusement partiel — soit aucun snapshot, soit un snapshot marqué incomplet ; la construction du snapshot est idempotente (même entrée → même sortie).
+- *Fraîcheur visible* : Balance (privé) et Ticker (public) sont observés à deux instants distincts ; le rapport affiche les deux horodatages (ou le plus ancien), jamais un seul non défini.
+- *Logs expurgés* : le rapport stdout vit sur la machine de l'utilisateur ; tout journal persisté suit une politique d'expurgation explicite (montants et codes traduits hors périmètre exclus, jamais de clé, jamais de réponse brute).
+
+**Shape 2 éliminée :** dépendance runtime + risque supply-chain au contact des clés pour un gain (auth HMAC) que WebCrypto couvre en ~30 lignes testables. Repli documenté si la prémisse d'échec se matérialise.
+
+**Shape 3 éliminée :** rejetée par la prémisse (pas d'observation automatisée vérifiable, pas de fraîcheur).
+
+**Choix documenté — port unique :** `observe() → Snapshot` regroupe positions (privé) et prix (public), alors que l'ADR-0001 distingue les capacités « état portefeuille » et « données marché ». Accepté pour S2 car le `Snapshot` du domaine S1 regroupe déjà les deux ; la scission éventuelle en deux ports est une décision S4, pas une dette cachée.
+
+### Flux de données (Shape 1)
+
+```
+.env (KRAKEN_API_KEY / KRAKEN_API_SECRET, hors dépôt, jamais journalisés)
+        │
+        ▼
+src/adapters/kraken/client.ts ── fetch signé HMAC-SHA512 ──► api.kraken.com /0/private/Balance
+        │                                                    (prix : /0/public/Ticker, sans auth)
+        │
+        ├── mode live : réponses réelles, locales, jamais versionnées
+        └── mode replay : fixtures/kraken/*.json (réponses anonymisées, observedAt gelé)
+        ▼
+src/adapters/kraken/translate.ts   (XXBT→BTC, suffixes .B/.F/.S/.M ; soldes nuls ignorés ;
+        │                            actifs non cibles signalés « non suivis » ; code mal formé = refus typé)
+        ▼
+src/ports/portfolio-source.ts      (port applicatif : observe() → Snapshot domaine)
+        ▼
+src/app/observe-portfolio.ts       (Snapshot → valorisation S1 → comparaison → rapport + journal)
+        ▼
+stdout (rapport horodaté, logs expurgés) ; aucune méthode d'ordre dans l'adaptateur
+```
+
+### Fichiers impactés (prévision)
+
+| Fichier | Action | Rôle |
+| --- | --- | --- |
+| `src/ports/portfolio-source.ts` | créer | Port applicatif de lecture du portefeuille (contrat, types d'observation) |
+| `src/adapters/kraken/client.ts` | créer | Transport HTTP signé (fetch, HMAC-SHA512 WebCrypto, nonce injectable, erreurs Kraken) |
+| `src/adapters/kraken/translate.ts` | créer | Codes d'actifs Kraken → codes domaine, décimales, politique en deux niveaux |
+| `src/app/observe-portfolio.ts` | créer | Cas d'usage : observation → snapshot → valorisation S1 → comparaison |
+| `src/main.ts` | modifier | Composition/sous-commande d'observation |
+| `src/config.ts` | modifier | Chargement des clés depuis l'environnement, jamais journalisées |
+| `fixtures/kraken/*.json` | créer | Réponses enregistrées anonymisées (observedAt gelé) pour le replay |
+| `tests/**` | créer | Tests port/adaptateur/traduction/comparaison sur fixtures + vecteurs HMAC |
+
+## Investigation
+
+Spike écarté : tester la signature en direct exigerait une clé API réelle, absente et hors dépôt par construction. Les interfaces ont été vérifiées sur les sources officielles ci-dessus ; la fidélité du client signé sera couverte par des tests sur vecteurs HMAC déterministes (incluant le décodage base64 de la clé et le SHA-256 interne) et réponses enregistrées. La première capture réelle restera une action manuelle de l'utilisateur, hors dépôt ; seules des versions anonymisées (montants réécrits, jeu d'actifs réduit) pourront être versionnées comme fixtures.
+
+## Concernes non résolues
+
+- **Précision décimale exacte** des soldes/prix Kraken (chaînes à échelle variable) : fixée par les fixtures enregistrés au moment de la spec ; règle de conversion vers `Monetary` (troncature vers zéro, convention S1) testée.
+- **SOL/USDT** : disponibilité documentée, à confirmer à la première capture réelle ; repli documenté : valorisation via paire USD + taux USDT/USD, hors périmètre de la première itération.
+- **Politique des suffixes Kraken** (`.S` staké, `.F` funding) : le périmètre est spot — la spec doit trancher si les soldes stakés comptent comme positions, avec un test de fixture dédié.
+- **Politique de persistance du journal** : la S1 journalise en mémoire/rapport ; si S2 persiste le journal, la politique d'expurgation (aucun montant réel, aucune clé) doit être définie en spec avant toute écriture disque.
+- **Historique des réponses `Balance`** : l'endpoint ne fournit ni horodatage ni historique ; les écarts structurels entre fraîcheur soldes et fraîcheur prix restent visibles via les deux horodatages du rapport.
