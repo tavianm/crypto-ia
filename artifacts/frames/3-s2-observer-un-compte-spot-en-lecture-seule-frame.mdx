@@ -1,0 +1,55 @@
+---
+title: "S2 : observer un compte spot en lecture seule"
+issue: 3
+status: approved
+tier: F-full
+date: 2026-09-11
+---
+
+## Problem
+
+La S1 a livré une simulation de rééquilibrage reproductible hors ligne, mais elle ne consomme que des fixtures synthétiques : rien ne relie la valorisation calculée à un état réel. Sans observation du compte, impossible de vérifier que les positions et la valorisation du domaine correspondent à une référence vérifiable, ni d'exposer une fraîcheur de données exploitable.
+
+S2 ajoute la première frontière d'adaptateur externe du socle : un port de lecture du portefeuille alimenté par un connecteur Kraken en lecture seule, testé sur réponses enregistrées, et une CLI d'observation à la demande qui compare positions réelles et valorisation calculée S1. C'est le socle des étapes suivantes (explications S3, boucle durable S4).
+
+L'impact observable : l'utilisateur lance une commande et obtient une comparaison positions réelles ↔ calcul, horodatée, rejouable sur les réponses enregistrées, sans qu'aucun ordre puisse être passé.
+
+## Who
+
+- **Primary :** le propriétaire du projet, qui exécute la CLI localement sur son propre compte spot Kraken avec une clé API limitée à la lecture.
+- **Secondary :** les étapes S3–S5 qui consommeront les instantanés observés ; les relecteurs du dépôt qui s'appuient sur les fixtures enregistrés pour comprendre le contrat du connecteur.
+
+## Constraints
+
+- Mode shadow strict : zéro API d'ordre, aucun code d'exécution ; l'activation par simple variable est interdite (AGENTS.md, roadmap S6).
+- Aucune clé ni donnée de compte versionnée : `.env` ignoré, réponses capturées sans secrets, logs expurgés.
+- Les tests s'exécutent sur réponses enregistrées uniquement — aucun appel live dans les tests ni la CI.
+- ADR 0001 : le domaine ignore Kraken. Le connecteur est un adaptateur derrière un port ; aucune dépendance runtime au SDK d'un exchange dans le domaine (zéro dépendance runtime, continuité avec S1 : value objects entiers).
+- Spécificités Kraken à traduire dans le port : codes d'actifs propres (XBT pour BTC), pagination, limites de débit, horodatage, devise de cote USDT. Les interfaces réelles restent à vérifier avant adoption ; le plan cible n'est pas présenté comme intégré testé.
+- Machine de dev Windows, runtime Bun/TypeScript, pas d'UI.
+- Un POC Python/CCXT a été abandonné (branche `archive/python-ccxt-poc`) et n'est pas repris tel quel.
+
+## Out of Scope
+
+- Tout ordre réel ou exécution, même en test : périmètre S6, spécification dédiée et autorisation explicite requises.
+- Boucle persistante, polling périodique, reprise/supervision : périmètre S4.
+- Explications LLM (S3), évaluation cloud (S5), UI (S7).
+- Plusieurs exchanges, plusieurs comptes, classes d'actifs hors spot crypto.
+- Capture live automatisée de réponses ; la capture reste une action manuelle de l'utilisateur, hors dépôt.
+
+## Premise Validity
+
+**Required — proposés à partir des réponses d'interview (Kraken, USDT, BTC/ETH/SOL, à la demande) et des critères d'acceptation de la roadmap ; révisables à l'approbation.**
+
+**Success in 6 months :** lancer la CLI d'observation produit une comparaison positions Kraken réelles (XBT/ETH/SOL valorisés en USDT) ↔ valorisation calculée S1, horodatée et vérifiable ; la même réponse enregistrée rejoue à l'identique ; logs expurgés ; zéro code d'ordre.
+
+**Failure in 6 months :** après 3 mois d'usage régulier, au moins un écart entre positions réelles et positions affichées est découvert a posteriori sans avoir été signalé par la CLI (défaut de fidélité du connecteur), ou un secret apparaît dans un log/artefact versionné — l'un de ces deux événements justifie d'abandonner le connecteur maison au profit d'une bibliothèque éprouvée.
+
+**Simplest alternative :** exporter manuellement le relevé de positions Kraken (web/CSV) et le passer au domaine S1 pour valorisation.
+**Why not simplest :** aucune fraîcheur ni horodatage fiable, source d'erreurs de saisie, non rejouable, et ne prépare ni S3 (explications) ni S4 (boucle durable) — la valeur de S2 est précisément l'observation automatisée vérifiable.
+
+## Complexity
+
+**Tier: F-full** — première frontière d'adaptateur externe (port + connecteur), contrat nouveau à définir et vérifier, inconnues sur les réponses Kraken réelles (pagination, rate limits, traduction XBT/BTC), multiples modules touchés (domaine, adaptateur, app, config).
+
+{Signals observed: nouveau pattern architectural (premier adaptateur ADR 0001) ; inconnues sur contrat externe ; périmètre multi-domaines ; pas de label de taille sur l'issue.}
