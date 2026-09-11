@@ -9,6 +9,7 @@ coverage/
 reports/
 .claude/worktrees/
 fixtures/__e2e-*.json
+fixtures/kraken/*.local.json
 *.log
 *.gguf
 data/

@@ -1,0 +1,111 @@
+---
+title: "Spec S2 : observer un compte spot en lecture seule"
+description: "Contrat complet de l'observation Kraken : port applicatif, adaptateur signé sans dépendance, traduction des codes, replay sur réponses anonymisées, comparaison horodatée avec la valorisation S1."
+issue: 3
+status: approved
+tier: F-full
+date: 2026-09-11
+---
+
+## Context
+
+Promu depuis l'analyse [`3-s2-observer-un-compte-spot-en-lecture-seule-analysis.mdx`](../analyses/3-s2-observer-un-compte-spot-en-lecture-seule-analysis.mdx) et le frame #3. Shape retenue : port applicatif `PortfolioSource` + adaptateur Kraken natif (fetch + WebCrypto, zéro dépendance), transport/nonce/horloge injectés, tests sur réponses enregistrées anonymisées. Contrats : ADR-0001 (les cas d'usage définissent les ports ; le domaine ignore Kraken), `docs/standards/backend-patterns.md`, `docs/standards/testing.md`.
+
+Décisions par défaut et écarts assumés tranchés ici (révisables à l'approbation) :
+
+- **Suffixes Kraken (`.B`, `.F`, `.T`, `.S`, `.M`) :** toutes les variantes suffixées sont hors positions spot — rapportées « non suivies », jamais dans les holdings. Les codes nus `BTC`/`ETH`/`SOL` sont aussi traduits (Kraken les retourne de plus en plus). Un statut de position pour le staké serait une évolution dédiée.
+- **Port unique positions + prix :** `PortfolioSource.observe()` fusionne les capacités « état portefeuille » et « données marché » de l'ADR-0001 — assumé car les deux proviennent de la même observation signée et la fraîcheur doit rester appariée ; le critère de scission (`PortfolioSource` + `MarketSource`) est documenté pour S4.
+- **Journal d'observation :** type d'entrée dédié S2 dans la couche app (`ObservationEntry`), miroir du schéma S1 mais hors `src/domain` — les champs `allocationPolicyVersion`/`feePolicyVersion` du domaine n'ont pas de sens pour une observation et `JournalEntry.source` y est typé `'s1-fixture'`. Le domaine reste inchangé ; aucune persistance disque en S2 (périmètre S4). C'est le deuxième schéma de journal du dépôt : si S3/S4 en introduisent un troisième, la base commune devra être extraite (critère d'entrée S4).
+- **Parse à l'échelle de l'actif :** écart à l'analyse, qui proposait la troncature vers zéro par défaut — un refus typé de tout excédent d'échelle casserait la première capture réelle (Kraken rend des soldes au-delà de la précision de l'actif, ex. BTC à 10 décimales). Règle retenue : zéros de fin ignorés ; excédent non nul tronqué vers zéro et **journalisé comme poussière** (convention S1), jamais silencieux ; le refus typé est réservé aux chaînes non décimales ou mal formées.
+- **Échec réseau :** comportement unique tranché — erreur typée, aucun rapport produit. Un snapshot ou rapport « incomplet » est un besoin de reprise, périmètre S4.
+- **Écart « visible » en S2 :** la confrontation référence brute ↔ valeur traduite ↔ valorisation calculée, dans le rapport. L'historique des écarts entre observations successives exige de la persistance : S4.
+- **Fixtures versionnés :** écrits à la main au format vérifié de l'analyse (aucune capture réelle n'existe encore) ; à la première capture, les fixtures pourront être dérivés **anonymisés** (montants réécrits, jeu d'actifs réduit) — les captures brutes restent locales et jamais versionnées. Le `.gitignore` gagne l'entrée `fixtures/kraken/*.local.json` (exigence, pas état existant).
+- **Données de compte et expurgation :** les soldes affichés dans le rapport stdout vivent sur la machine de l'opérateur — c'est la référence demandée par l'issue. L'expurgation signifie : jamais de secret ni de valeur d'environnement dans **toute** sortie, et jamais de donnée de compte dans un artefact versionné ou persisté.
+- **Mode replay CLI :** `bun run observe --replay fixtures/kraken/` rejoue les réponses enregistrées sans réseau ni clés — chemin de démonstration et support du test e2e.
+
+Gate 2.5 (splitting) : écarté — critères fortement couplés aux trois slices, appétit d'une PR unique (même justification que S1).
+
+## Goal
+
+Exécuter `bun run observe` produit un rapport d'observation horodaté confrontant les positions spot Kraken réelles (BTC/ETH/SOL en USDT, devise de cote) à la valorisation calculée par le domaine S1, identique octet par octet à chaque rejeu sur les mêmes réponses enregistrées, avec refus typés de toute donnée invalide, aucun secret ni donnée de compte dans les sorties versionnées, et structurellement aucun chemin d'ordre.
+
+## Users
+
+- **Primaire :** l'opérateur du dépôt, titulaire du compte spot Kraken, qui lance la CLI à la demande (live avec sa clé lecture seule, ou replay sans clé) et lit le rapport pour vérifier positions et valorisation.
+- **Secondaires :** S3 (lira les rapports d'observation pour l'explication), S4 (persistera les journaux et la fraîcheur), revues/CI qui vérifient rejeu et absence de chemin d'ordre.
+
+## Expected Behavior
+
+Sans clés configurées ou avec `--replay fixtures/kraken/`, la CLI compose un `PortfolioSource` de replay : elle lit les réponses Balance et Ticker enregistrées, les traduit (codes Kraken → codes domaine, échelles exactes à la précision de l'actif), construit un `Snapshot` de domaine validé, calcule la valorisation S1 et affiche le rapport : JSON canonique stable suivi d'un résumé texte — par actif suivi : solde brut Kraken (référence), unités traduites, prix utilisé, valeur en USDT ; horodatages distincts soldes/prix ; poussière éventuelle journalisée ; actifs non suivis listés. Deux exécutions de replay produisent deux sorties identiques octet par octet. En mode live (clés présentes), le même cas d'usage s'exécute avec un transport signé HMAC-SHA512, horodatages estampillés par l'horloge injectée à réception de chaque réponse ; tout échec réseau ou d'API produit une erreur typée et aucun rapport. Aucun appel réseau en mode replay ; aucune écriture fichier ; étiquette « observed » distincte de « simulated » dans le rapport.
+
+## Data Model & Consumers
+
+> **Sidecars forge non générés** (plugin forge absent de l'environnement, même statut que S1) : `3-{slug}-data-model.html` et `3-{slug}-consumers.html` à régénérer après installation. Le modèle textuel ci-dessous fait foi jusqu'à régénération.
+
+Types du domaine S1 réutilisés sans modification : `AssetCode`, `AssetMeta`, `Amount`, `Price`, `Holding`, `Snapshot`, `Monetary` (unités entières `bigint` + `decimals`, jamais de flottant), erreurs typées (`src/domain/errors.ts`).
+
+Nouveaux types (couches ports/adaptateurs/app — le domaine reste inchangé) :
+
+| Type | Couche | Champs | Notes |
+| --- | --- | --- | --- |
+| `ObservedSnapshot` | port | `snapshot: Snapshot, balancesObservedAt: string, pricesObservedAt: string` | horodatages ISO 8601 UTC forme canonique fixe (`Z`, millisecondes), estampillés par l'horloge injectée à réception (live) ou gelés dans les fixtures (replay) ; `snapshot.observedAt` = le plus ancien, calculé par la fabrique du port sur formes normalisées |
+| `PortfolioSource` | port (`src/ports/`) | `observe(): Promise<ObservedSnapshot>` | contrat applicatif ; dépend des types domaine, jamais de Kraken |
+| `KrakenClientConfig` | adaptateur | `apiKey, apiSecretBase64, transport?, nonceProvider?, clock?, baseUrl?` | `transport: (req: { path, body, headers }) => Promise<{ status, body }>` — injecté, le signataire s'applique au-dessus ; `nonceProvider: () => bigint` (int64 en `bigint`, jamais `number`) ; défaut nonce : horloge injectée en millisecondes + garde monotone en process ; défauts : `fetch` global, horloge réelle |
+| `KrakenBalance` | adaptateur | carte brute `asset → solde (chaîne)` | réponse `/0/private/Balance`, forme vérifiée `{ error: [], result: {...} }` |
+| `KrakenTicker` | adaptateur | carte brute `paire → { c: [prix, volume], ... }` | réponse publique `/0/public/Ticker?pair=XBTUSDT,ETHUSDT,SOLUSDT` ; traduction clé de paire → actif, distincte de la traduction d'actifs |
+| `TranslationResult` | adaptateur | `holdings, untracked: { krakenCode, rawBalance }[], metas, prices, dust: { krakenCode, rawBalance }[]` | politique deux niveaux : soldes nuls ignorés ; actifs non ciblés non nuls (y compris `USDT` cash et toute variante suffixée `.B/.F/.T/.S/.M`) → `untracked`, non bloquant ; excédent d'échelle non nul → tronqué vers zéro et listé dans `dust` (journalisé) ; chaîne non décimale (`^\d+(\.\d+)?$` attendu) → refus typé |
+| `ObservationEntry` | app (journal) | `schemaVersion, id, kind: "observation" \| "observation-rejection", source: "s2-kraken-replay" \| "s2-kraken-live", observedAt, inputFingerprint, data` | miroir du schéma S1 hors `src/domain` ; `id` = FNV-1a 64 bits sur la forme canonique hors `id` ; poussière et refus journalisés sans jamais afficher de secret ni de valeur d'environnement |
+| `ObservationReport` | app | `kind: "observed", snapshot, valuation, untracked, dust, entries, freshness` | `valuation` = sortie S1 (`valueOfHoldings`) ; `freshness: { balancesAt, pricesAt }` ; rendu JSON canonique + résumé texte, conventions S1 |
+
+**Chaînes décimales exactes :** tout solde/prix Kraken est parsé sans flottant. Solde : zéros de fin ignorés, `(units, decimals)` à l'échelle de `AssetMeta.decimals` (BTC 8, ETH 18, SOL 9) ; excédent non nul → poussière tronquée vers zéro et journalisée. Prix : parse exact en `(units, decimals)` où `decimals` = échelle de la chaîne, ≤ 18 (Ticker `c[0]`) ; la re-sérialisation canonique depuis `(units, decimals)` reproduit la valeur exacte (perte zéro). Aucune troncature sur les prix — la troncature vers zéro reste la convention des propositions S1, hors périmètre ici.
+
+**Consumer map :**
+
+| Consommateur | Champs consommés | Quand | Statut |
+| --- | --- | --- | --- |
+| `src/main.ts observe` (composition) | `PortfolioSource` → `ObservationReport` | à chaque exécution CLI | cette issue |
+| `src/adapters/kraken/*` | `KrakenClientConfig`, réponses Kraken brutes | construction du port | cette issue |
+| `tests/*` | port, adaptateur, traduction, cas d'usage, fixtures replay | tests unitaires et e2e | cette issue |
+| S3 explication | lira `ObservationReport`/`ObservationEntry` | futur | futur |
+| S4 boucle durable | persistera journal + fraîcheur, scission éventuelle des ports | futur | futur |
+
+## Breadboard
+
+| ID | Affordance | Traite | Données |
+| --- | --- | --- | --- |
+| K1 | `loadObserveConfig(env)` dans `src/config.ts` (`loadConfig` S1 inchangé) + entrée `.gitignore` `fixtures/kraken/*.local.json` | — | `runMode: "shadow"` forcé ; clés Kraken présentes/absentes sans exposer leurs valeurs ; erreurs sans valeurs d'environnement |
+| F1 | `fixtures/kraken/balance-*.json`, `fixtures/kraken/ticker-*.json` (versionnés, écrits à la main au format vérifié, horodatages gelés forme canonique) | — | réponses Kraken au format documenté de l'analyse |
+| P1 | `src/ports/portfolio-source.ts` : `PortfolioSource` + `ObservedSnapshot` (fabrique : normalisation ISO, `observedAt` = min) | → `ObservedSnapshot` | types domaine uniquement |
+| A1 | `src/adapters/kraken/client.ts` : `fetchBalance()`, `fetchTicker(pairs)` — méthodes explicites uniquement, pas de requête privée générique | → `KrakenBalance`, `KrakenTicker` | signature `API-Sign = HMAC-SHA512(base64decode(secret), chemin + SHA256(nonce + corps))`, nonce injecté croissant, erreurs Kraken typées (`error[]`, `EAPI:Rate limit`) |
+| A2 | `src/adapters/kraken/translate.ts` : codes (`XXBT`/`XBT`→`BTC`, `XETH`/`ETH`→`ETH`, `SOL`→`SOL`, `USDT` devise de cote), variantes suffixées, échelles à la précision de l'actif, poussière, politique deux niveaux | → `TranslationResult` | catalogue d'actifs suivis : BTC (8), ETH (18), SOL (9), devise de cote USDT |
+| A3 | adaptateur de replay (même port, transport = fixtures F1) | → `ObservedSnapshot` | zéro réseau, zéro clé requise |
+| U1 | `observePortfolio(source)` dans `src/app/observe-portfolio.ts` (pur : reçoit un `ObservedSnapshot`) | → `ObservationReport` | valorisation via S1, `ObservationEntry` (poussière, refus), comparaison référence brute ↔ valeur traduite ↔ valorisation |
+| R1 | rendu du rapport d'observation (JSON canonique S1 + résumé texte, fonctions pures) | `ObservationReport` | montants en chaînes canoniques, double horodatage, poussière, `untracked`, étiquette `kind: "observed"` |
+| M1 | CLI `bun run observe [--replay <répertoire>]` dans `src/main.ts` (sous-commande ; script `observe` ajouté à `package.json` ; `bun run start` S1 inchangé) | K1 → A1/A3 → U1 → R1 | sans clés et sans `--replay` : échec propre avec message clair sans valeur |
+
+Règles transversales : refus typés citant le champ fautif sans jamais afficher sa valeur ni de valeur d'environnement ; aucun secret dans les journaux, rapports ou fixtures (test avec fausses clés) ; les soldes ne sortent que dans le rapport stdout local, jamais dans un artefact versionné ; `src/domain/**` inchangé et toujours sans I/O ; l'adaptateur n'expose aucune capacité d'écriture ou d'ordre (pas de requête privée générique, aucun chemin `/0/private/` autre que `Balance`) ; aucune horloge murale hors adaptateur (nonce/horloge injectés) ; tests statiques par grep conventionnalisé (style S1).
+
+## Slices
+
+| Slice | Contenu (IDs) | Démo indépendante |
+| --- | --- | --- |
+| SL-A « Port, traduction, fixtures » | P1, A2, F1, tests de traduction (codes nus et préfixés, variantes suffixées, soldes nuls, non suivis, poussière journalisée, refus typés, re-sérialisation sans perte) | une réponse Balance enregistrée devient un `TranslationResult` fidèle ; chaque cas invalide produit son refus typé |
+| SL-B « Client signé et erreurs » | A1, tests vecteurs HMAC déterministes (incluant base64decode et SHA-256 interne), nonce croissant du fournisseur par défaut, erreurs Kraken (`error[]`, rate limit), transport injecté | la signature d'entrées déterministes correspond aux vecteurs attendus ; chaque erreur Kraken devient une erreur typée du port |
+| SL-C « Observation, replay, CLI » | A3, K1, U1, R1, M1, tests e2e (deux replays CLI identiques octet par octet, échec réseau → erreur typée sans rapport, absence de secrets dans les sorties) | `bun run observe --replay fixtures/kraken/` exécuté deux fois affiche deux sorties identiques octet par octet |
+
+## Success Criteria
+
+- [ ] Deux exécutions de `bun run observe --replay fixtures/kraken/` (sous-processus) produisent un stdout identique octet par octet, JSON canonique et résumé texte compris, sans réseau ni clés.
+- [ ] La signature `API-Sign` calculée sur des entrées déterministes (secret de test, nonce, corps) correspond exactement aux vecteurs attendus calculés indépendamment ; le test couvre `base64decode(secret)` et le `SHA-256(nonce + corps)` interne.
+- [ ] Le fournisseur de nonce **par défaut** produit deux valeurs strictement croissantes sur deux appels successifs, y compris quand l'horloge injectée retourne deux fois la même milliseconde ; le nonce est un `bigint`, jamais un `number`.
+- [ ] `XXBT`/`XBT`→`BTC` (8 décimales), `XETH`/`ETH`→`ETH` (18), `SOL`→`SOL` (9), `USDT` reconnu comme devise de cote ; `XLTC` et toute variante suffixée (`.B/.F/.T/.S/.M`) suivent le chemin `untracked`.
+- [ ] Un solde nul est ignoré ; un actif non ciblé non nul (ex. `ZUSD`, ou un solde `USDT` cash) figure dans `untracked` sans bloquer l'observation ; une chaîne non décimale ou mal formée produit un refus typé (test dédié chacun).
+- [ ] Un solde BTC rendu à l'échelle 10 avec excédent nul se traduit exactement à l'échelle 8 ; avec excédent non nul, il est tronqué vers zéro et la poussière apparaît dans `dust`, le rapport et le journal — jamais silencieusement (tests dédiés).
+- [ ] Chaque chaîne de prix parsée puis re-sérialisée reproduit exactement la valeur source (perte zéro) ; une échelle de prix > 18 est refusée par `ScaleMismatchError` ; aucun flottant dans la chaîne de traduction (test statique grep).
+- [ ] Un transport injecté qui échoue entre Balance et Ticker (ou une réponse Kraken `error: ["EAPI:Rate limit"]`) produit une erreur typée du port et aucun rapport.
+- [ ] Le rapport affiche les horodatages distincts soldes et prix ; `Snapshot.observedAt` vaut le plus ancien des deux, calculé sur formes ISO 8601 normalisées (UTC `Z`, millisecondes), et passe la validation du domaine.
+- [ ] En mode live sans clés configurées, la CLI échoue proprement avec un message clair n'exposant aucune valeur d'environnement ; `loadConfig` S1 est inchangé et ses tests passent sans modification.
+- [ ] Un test avec fausses clés vérifie qu'aucune sortie (rapport, journal, erreur) ne contient la clé, le secret ni une valeur d'environnement brute.
+- [ ] Un test statique vérifie que l'adaptateur ne contient aucun chemin d'ordre (`/0/private/` limité à `Balance`), aucune méthode de requête privée générique, et que `dependencies`/`devDependencies` de `package.json` sont inchangés (le script `observe` ajouté excepté).
+- [ ] Les fixtures versionnés `fixtures/kraken/*.json` sont écrits à la main au format vérifié (jamais une capture brute) ; `fixtures/kraken/*.local.json` est ignoré par git.
+- [ ] `bun run check`, `bun run license:check` et `bun run secrets:check --all` passent.
