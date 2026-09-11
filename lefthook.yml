@@ -17,6 +17,6 @@ pre-push:
     check:
       run: bun run check
     secrets:
-      run: bun run secrets:check --history
+      run: bun run secrets:check --pre-push
     licenses:
       run: bun run license:check
