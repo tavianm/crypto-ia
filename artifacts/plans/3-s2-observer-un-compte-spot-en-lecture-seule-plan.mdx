@@ -1,0 +1,337 @@
+---
+title: "Plan: S2 observation Kraken lecture seule"
+issue: 3
+spec: artifacts/specs/3-s2-observer-un-compte-spot-en-lecture-seule-spec.mdx
+complexity: 6/10
+tier: F-full
+generated: "2026-09-11T21:30:00Z"
+---
+
+## Summary
+
+Première frontière d'adaptateur de crypto-ia : port applicatif `PortfolioSource`, adaptateur Kraken natif signé HMAC-SHA512 via WebCrypto (zéro dépendance), traduction exacte des codes et échelles avec poussière journalisée, adaptateur de replay sur fixtures enregistrés, cas d'usage `observePortfolio` réutilisant la valorisation S1, CLI `bun run observe [--replay]` au rendu canonique rejouable octet par octet. `src/domain/**` inchangé ; aucun chemin d'ordre.
+
+## Architecture
+
+### Data Flow
+
+**Diagram :** sidecar `3-{slug}-data-flow.html` non généré (plugin forge absent ; à régénérer).
+
+`.env` (clés, hors dépôt) → K1 config sans exposition → A1 client signé (live : `/0/private/Balance` + `/0/public/Ticker`) **ou** A3 replay (fixtures F1) → A2 traduction (codes, échelles, poussière, untracked) → P1 port (`ObservedSnapshot`) → U1 `observePortfolio` (valorisation S1, `ObservationEntry`) → R1 rendu canonique → stdout. Deux sources mutuellement exclusives ; le domaine ne voit que des types qu'il connaît déjà.
+
+### File x Function Map
+
+**Diagram :** sidecar `3-{slug}-file-map.html` non généré (plugin forge absent ; à régénérer).
+
+`src/ports/portfolio-source.ts` : contrat + fabrique normalisée. `src/adapters/kraken/` : `client.ts` (signataire, méthodes explicites, erreurs typées), `translate.ts` (catalogue, politique deux niveaux, parse exact), `replay.ts` (transport fixtures). `src/app/observe-portfolio.ts` (cas d'usage) + `src/app/observe-report.ts` (rendu). `src/config.ts` : `loadObserveConfig`. `src/main.ts` : sous-commande observe. `tests/` : un fichier par module + e2e. `fixtures/kraken/` : balance/ticker enregistrés.
+
+## Bootstrap Context
+
+Analyse #3 (approuvée) : Shape 1 « port + connecteur Kraken natif » retenue ; interfaces vérifiées le 2026-09-11 (`POST /0/private/Balance` sans pagination ni filtre, codes préfixés `XXBT`/suffixes, Ticker public, permission « Query Funds » suffisante). Décisions de spec : journal d'observation dédié hors domaine (`ObservationEntry`), poussière tronquée vers zéro **et journalisée**, échec réseau = erreur typée sans rapport, port unique positions+prix assumé (critère de scission S4), fixtures écrits à la main au format vérifié. Références de style : `src/domain/portfolio.ts` (fabriques figées), `src/app/simulate-rebalance.ts` (cas d'usage pur avec rejet journalisé), `src/main.ts` (composition), `tests/domain/*.test.ts` (`bun:test`).
+
+## Agents
+
+| Agent | Tasks | Files |
+|-------|-------|-------|
+| tester-A | T1, T2, T3, RG-A | tests/adapters/kraken/{translate,portfolio-source}.test.ts |
+| tester-B | T7, T8, RG-B | tests/adapters/kraken/client.test.ts |
+| tester-C | T10, T11, T12, RG-C | tests/observe-cli.test.ts, tests/app/observe-portfolio.test.ts, tests/config.test.ts |
+| backend-dev-A | T4, T5 | src/ports/portfolio-source.ts, src/adapters/kraken/translate.ts |
+| backend-dev-B | T9 | src/adapters/kraken/client.ts |
+| backend-dev-C | T13, T14, T17 | src/app/observe-portfolio.ts, src/app/observe-report.ts, src/main.ts |
+| backend-dev-D | T15, T16 | src/adapters/kraken/replay.ts, src/config.ts |
+| backend-dev-E | T6 | fixtures/kraken/*.json |
+| doc-writer-A | T18 | README.md, .gitignore |
+
+## Wave Structure
+
+7 vagues, max 4 agents parallèles. Écoulement ~7 vagues (≈40 min d'agents) vs ~19 tâches séquentielles (≈90 min).
+
+| Wave | Trigger | Agents | Tasks |
+|------|---------|--------|-------|
+| 1 | start | 4 ∥ | tester-A: T1,T2,T3 · tester-B: T7,T8 · tester-C: T10,T11,T12 · backend-dev-E: T6 |
+| 2 | Waves RED faites | 3 ∥ | tester-A: RG-A · tester-B: RG-B · tester-C: RG-C |
+| 3 | Wave 2 fait | 3 ∥ | backend-dev-A: T4→T5 · backend-dev-B: T9 · backend-dev-D: T16 |
+| 4 | Wave 3 fait | 2 ∥ | backend-dev-C: T13 · backend-dev-D: T15 |
+| 5 | Wave 4 fait | 1 | backend-dev-C: T14 |
+| 6 | Wave 5 fait | 1 | backend-dev-C: T17 |
+| 7 | Wave 6 fait | 1 | doc-writer-A: T18 |
+
+Sentinelles RED-GATE : RG-A (← T1,T2,T3), RG-B (← T7,T8), RG-C (← T10,T11,T12) — marquées dès que leurs tâches RED sont terminées ; les vérifications `deferred` des tâches GREEN de la slice sont validées après leur sentinelle.
+
+### Budget — per task
+
+| Task | Items | Class | Est. ops | Split? |
+|------|-------|-------|----------|--------|
+| T1–T3 (RED traduction/port) | 3 | bounded | 3 chacun | — |
+| T6 (fixtures) | 2 fichiers | judgmental | 5 | — |
+| T7–T8 (RED client) | 2 | judgmental | 5 chacun | — |
+| T10–T12 (RED e2e/config) | 3 | bounded | 3–4 chacun | — |
+| RG-A/RG-B/RG-C | 3 | trivial | 1 chacun | — |
+| T4 (port) | 1 | judgmental | 5 | — |
+| T5 (traduction) | 1 | judgmental | 6 | — |
+| T9 (client signé) | 1 | judgmental | 6 | — |
+| T13 (cas d'usage) | 1 | judgmental | 6 | — |
+| T14 (rendu) | 1 | judgmental | 6 | — |
+| T15 (replay) | 1 | judgmental | 5 | — |
+| T16 (config) | 1 | bounded | 4 | — |
+| T17 (composition) | 1 | judgmental | 6 | — |
+| T18 (docs) | 1 | trivial | 2 | — |
+
+**Total estimated ops : ~84**
+
+### Budget — per agent instance
+
+| Instance | Tasks | Σ ops | Subjects | Split? |
+|----------|-------|-------|----------|--------|
+| tester-A | T1, T2, T3 | 9 | translation | — |
+| tester-B | T7, T8 | 10 | http | — |
+| tester-C | T10, T11, T12 | 11 | e2e, secrets | — |
+| backend-dev-A | T4, T5 | 11 | contract, parser | — |
+| backend-dev-B | T9 | 6 | http | — |
+| backend-dev-C | T13, T14, T17 | 18 | orchestration, render | — |
+| backend-dev-D | T15, T16 | 9 | replay, config | — |
+| backend-dev-E | T6 | 5 | fixtures | — |
+| doc-writer-A | T18 | 2 | docs | — |
+
+Aucun dépassement de cap (≤ 4 tâches, ≤ 2 sujets, ≤ 50 ops par instance).
+
+## Micro-Tasks
+
+### Slice SL-A « Port, traduction, fixtures »
+
+#### Task 1: Écrire les tests RED de traduction des codes → tester-A [P]
+- **File:** `tests/adapters/kraken/translate.test.ts`
+- **Snippet:** `test.each` sur `XXBT/XBT→BTC`, `XETH/ETH→ETH`, `SOL→SOL`, `USDT` devise de cote ; `XLTC` et suffixes `.B/.F/.T/.S/.M` → `untracked` ; solde nul ignoré ; `ZUSD`/`USDT` cash → `untracked` ; chaîne non décimale → refus typé
+- **Verify:** `bun test tests/adapters/kraken/translate.test.ts` (échoue : module absent)
+- **Expected:** tous les cas RED | **Time:** 5 min | **Difficulty:** 3
+- **Traces:** SC4, SC5 | **Phase:** RED
+
+#### Task 2: Écrire les tests RED d'échelles et poussière → tester-A [P]
+- **File:** `tests/adapters/kraken/translate.test.ts` (suite échelles)
+- **Snippet:** solde BTC échelle 10 excédent nul → exact à l'échelle 8 ; excédent non nul → tronqué vers zéro + `dust` ; prix `c[0]` parsé exact, re-sérialisation sans perte ; échelle prix > 18 → `ScaleMismatchError` ; `^\d+(\.\d+)?$` grammar
+- **Verify:** `bun test tests/adapters/kraken/translate.test.ts` (échoue)
+- **Expected:** tous les cas RED | **Time:** 6 min | **Difficulty:** 4
+- **Traces:** SC6, SC7 | **Phase:** RED
+
+#### Task 3: Écrire les tests RED du port → tester-A [P]
+- **File:** `tests/adapters/kraken/portfolio-source.test.ts`
+- **Snippet:** fabrique `ObservedSnapshot` : horodatages normalisés (`Z`, millisecondes), `snapshot.observedAt` = min lexical sur formes normalisées, `Snapshot` validé par le domaine, types figés
+- **Verify:** `bun test tests/adapters/kraken/portfolio-source.test.ts` (échoue)
+- **Expected:** tous les cas RED | **Time:** 4 min | **Difficulty:** 3
+- **Traces:** SC9 | **Phase:** RED
+
+#### RED-GATE: RED complete SL-A → tester-A
+- **Verify:** T1, T2, T3 terminées | **Phase:** RED-GATE
+
+#### Task 4: Implémenter le port applicatif → backend-dev-A
+- **File:** `src/ports/portfolio-source.ts`
+- **Snippet:** `export interface PortfolioSource { observe(): Promise<ObservedSnapshot> }` + `observedSnapshot(input)` : normalisation ISO UTC ms, `min(balancesAt, pricesAt)`, `snapshot()` du domaine, `Object.freeze`
+- **Verify:** `bun run typecheck` (ready) puis `bun test tests/adapters/kraken/portfolio-source.test.ts` (deferred → RG-A)
+- **Expected:** tests T3 verts | **Time:** 5 min | **Difficulty:** 4
+- **Traces:** SC9 | **Phase:** GREEN
+
+#### Task 5: Implémenter la traduction Kraken → backend-dev-A
+- **File:** `src/adapters/kraken/translate.ts`
+- **Snippet:** catalogue `{ XXBT/BTC: 8, XETH/ETH: 18, SOL: 9 }`, devise de cote `USDT` ; `translateBalance(raw)` → `TranslationResult` (holdings/untracked/dust) ; `translateTicker(raw)` → `Price[]` ; parse `bigint` sans flottant, zéros de fin ignorés, poussière tronquée+journalisée
+- **Verify:** `bun test tests/adapters/kraken/translate.test.ts` (deferred → RG-A)
+- **Expected:** tests T1, T2 verts | **Time:** 8 min | **Difficulty:** 5
+- **Traces:** SC4, SC5, SC6, SC7 | **Phase:** GREEN
+
+#### Task 6: Créer les fixtures Kraken enregistrés → backend-dev-E [P]
+- **File:** `fixtures/kraken/balance-1.json`, `fixtures/kraken/ticker-1.json`
+- **Snippet:** format vérifié de l'analyse : `{ "error": [], "result": { "XXBT": "0.00125000", "XETH": "8.0000000000", "SOL": "100.000000000", "ZUSD": "42.13" } }` ; ticker `{ "XBTUSDT": { "c": ["54370.1", "1.20"] } }` — montants dérivés du jeu S1, horodatages gelés `2026-09-11T00:00:00.000Z`
+- **Verify:** `bun -e "JSON.parse(require('fs').readFileSync('fixtures/kraken/balance-1.json','utf8'))"` sans erreur
+- **Expected:** fixtures valides, écrits à la main, aucune capture brute | **Time:** 5 min | **Difficulty:** 3
+- **Traces:** SC13 | **Phase:** GREEN
+
+### Slice SL-B « Client signé et erreurs »
+
+#### Task 7: Écrire les tests RED de vecteurs HMAC → tester-B [P]
+- **File:** `tests/adapters/kraken/client.test.ts`
+- **Snippet:** vecteurs déterministes (secret de test base64 `KkIlKCZc`, nonce `1726088400000`, corps JSON fixé, chemin `/0/private/Balance`) ; `API-Sign` attendu calculé indépendamment et figé en constante ; couvre `base64decode(secret)` et `SHA256(nonce + corps)`
+- **Verify:** `bun test tests/adapters/kraken/client.test.ts` (échoue)
+- **Expected:** RED | **Time:** 6 min | **Difficulty:** 4
+- **Traces:** SC2 | **Phase:** RED
+
+#### Task 8: Écrire les tests RED nonce et erreurs → tester-B [P]
+- **File:** `tests/adapters/kraken/client.test.ts` (suite nonce/erreurs)
+- **Snippet:** fournisseur par défaut : deux appels → `bigint` strictement croissants même si l'horloge injectée répète une milliseconde ; `error: ["EAPI:Rate limit"]` → erreur typée du port ; transport injecté qui rejette → propagation typée ; `fetchBalance`/`fetchTicker` appellent les bons chemins (transport espion)
+- **Verify:** `bun test tests/adapters/kraken/client.test.ts` (échoue)
+- **Expected:** RED | **Time:** 5 min | **Difficulty:** 3
+- **Traces:** SC3, SC8 | **Phase:** RED
+
+#### RED-GATE: RED complete SL-B → tester-B
+- **Verify:** T7, T8 terminées | **Phase:** RED-GATE
+
+#### Task 9: Implémenter le client signé Kraken → backend-dev-B
+- **File:** `src/adapters/kraken/client.ts`
+- **Snippet:** `createKrakenClient(config)` : méthodes explicites `fetchBalance()` / `fetchTicker(pairs)` uniquement ; signataire `API-Sign = HMAC-SHA512(base64decode(secret), chemin + SHA256(nonce + corps))` via `crypto.subtle` ; `nonceProvider: () => bigint` défaut horloge ms + garde monotone process ; transport injecté `(req) => Promise<{status, body}>` défaut `fetch` ; erreurs `error[]` et `EAPI:*` typées ; `baseUrl` défaut `https://api.kraken.com`
+- **Verify:** `bun test tests/adapters/kraken/client.test.ts` (deferred → RG-B)
+- **Expected:** tests T7, T8 verts ; aucun chemin autre que `Balance`/`Ticker` | **Time:** 8 min | **Difficulty:** 5
+- **Traces:** SC2, SC3, SC8, SC12 | **Phase:** GREEN
+
+### Slice SL-C « Observation, replay, CLI »
+
+#### Task 10: Écrire le test RED e2e replay CLI → tester-C [P]
+- **File:** `tests/observe-cli.test.ts`
+- **Snippet:** deux sous-processus `bun src/main.ts observe --replay fixtures/kraken/` → stdout identiques octet par octet ; aucun accès réseau (assertion : transport non appelé en replay) ; sortie avec étiquette `kind: "observed"`
+- **Verify:** `bun test tests/observe-cli.test.ts` (échoue)
+- **Expected:** RED | **Time:** 5 min | **Difficulty:** 4
+- **Traces:** SC1 | **Phase:** RED
+
+#### Task 11: Écrire les tests RED du cas d'usage → tester-C [P]
+- **File:** `tests/app/observe-portfolio.test.ts`
+- **Snippet:** `observePortfolio(observedSnapshot)` → `ObservationReport` : valorisation S1 par actif, `ObservationEntry` (`kind: "observation"`, `source: "s2-kraken-replay"`, `id` FNV-1a hors `id`), poussière journalisée, `untracked` listés, `freshness` double horodatage ; `untracked` non bloquant
+- **Verify:** `bun test tests/app/observe-portfolio.test.ts` (échoue)
+- **Expected:** RED | **Time:** 6 min | **Difficulty:** 4
+- **Traces:** SC6, SC9, SC11 | **Phase:** RED
+
+#### Task 12: Écrire les tests RED secrets et config → tester-C [P]
+- **File:** `tests/config.test.ts` (extension) + `tests/observe-cli.test.ts` (suite secrets)
+- **Snippet:** `loadObserveConfig` : clés présentes/absentes sans exposer leurs valeurs dans l'objet ni les erreurs ; sans clés et sans `--replay` → échec propre sans valeur ; sorties CLI avec fausses clés ne contiennent ni clé ni secret ni valeur d'environnement ; `loadConfig` S1 inchangé (tests existants verts)
+- **Verify:** `bun test tests/config.test.ts` (échoue sur les nouveaux cas)
+- **Expected:** RED sur les nouveaux cas uniquement | **Time:** 5 min | **Difficulty:** 3
+- **Traces:** SC10, SC11 | **Phase:** RED
+
+#### RED-GATE: RED complete SL-C → tester-C
+- **Verify:** T10, T11, T12 terminées | **Phase:** RED-GATE
+
+#### Task 13: Implémenter le cas d'usage d'observation → backend-dev-C
+- **File:** `src/app/observe-portfolio.ts`
+- **Snippet:** `observePortfolio(observed: ObservedSnapshot): ObservationReport` — `valueOfHoldings` S1, `ObservationEntry` via `fnv1a64` du domaine (import pur), poussière et untracked dans `data`, refus domaine → `kind: "observation-rejection"` sans valeur exposée ; pur, sans I/O
+- **Verify:** `bun test tests/app/observe-portfolio.test.ts` (deferred → RG-C)
+- **Expected:** tests T11 verts | **Time:** 7 min | **Difficulty:** 4
+- **Traces:** SC6, SC9, SC11 | **Phase:** GREEN
+
+#### Task 14: Implémenter le rendu du rapport d'observation → backend-dev-C
+- **File:** `src/app/observe-report.ts`
+- **Snippet:** `renderObservationReport(report): string` — JSON canonique (clés triées, montants `"<units>e-<decimals>"`) + résumé texte par actif : solde brut référence, unités traduites, prix, valeur USDT ; double horodatage ; `untracked` et `dust` listés ; conventions S1
+- **Verify:** `bun test tests/app/observe-portfolio.test.ts` (deferred → RG-C)
+- **Expected:** rendu stable et sans secret | **Time:** 6 min | **Difficulty:** 4
+- **Traces:** SC9, SC11 | **Phase:** GREEN
+
+#### Task 15: Implémenter l'adaptateur de replay → backend-dev-D
+- **File:** `src/adapters/kraken/replay.ts`
+- **Snippet:** `createReplaySource(dir): PortfolioSource` — lit `balance-*.json`/`ticker-*.json`, applique A2, horodatages gelés des fixtures, `PortfolioSource` du port P1 ; zéro réseau, zéro clé
+- **Verify:** `bun test tests/adapters/kraken/portfolio-source.test.ts` + nouveaux cas replay (deferred → RG-C)
+- **Expected:** fixtures → `ObservedSnapshot` fidèle | **Time:** 5 min | **Difficulty:** 4
+- **Traces:** SC1, SC13 | **Phase:** GREEN
+
+#### Task 16: Implémenter la config d'observation → backend-dev-D
+- **File:** `src/config.ts`, `.gitignore`
+- **Snippet:** `loadObserveConfig(env): { runMode: "shadow"; replayDir?: string; kraken: { apiKey: string; apiSecretBase64: string } | null }` — `runMode` forcé shadow, erreurs sans valeurs ; `.gitignore` += `fixtures/kraken/*.local.json` ; `loadConfig` S1 inchangé
+- **Verify:** `bun test tests/config.test.ts` (deferred → RG-C)
+- **Expected:** nouveaux tests T12 verts, anciens intacts | **Time:** 4 min | **Difficulty:** 3
+- **Traces:** SC10, SC11, SC13 | **Phase:** GREEN
+
+#### Task 17: Composer la CLI d'observation → backend-dev-C
+- **File:** `src/main.ts`, `package.json`
+- **Snippet:** sous-commande `observe [--replay <dir>]` : K1 → source (replay si flag, sinon live via T9 avec clés K1) → U1 → R1 ; sans clés et sans replay → échec propre ; script `"observe": "bun src/main.ts observe"` ; test statique : `/0/private/` limité à `Balance` dans l'arbre, deps inchangées
+- **Verify:** `bun test tests/observe-cli.test.ts` (deferred → RG-C) puis `bun run check` complet
+- **Expected:** deux replays identiques octet par octet ; check vert | **Time:** 8 min | **Difficulty:** 5
+- **Traces:** SC1, SC10, SC12, SC14 | **Phase:** GREEN
+
+#### Task 18: Documenter la commande d'observation → doc-writer-A [P]
+- **File:** `README.md`
+- **Snippet:** ligne `bun run observe` dans la table des commandes (« Observe un compte Kraken en lecture seule, ou rejoue des réponses enregistrées ») ; note shadow : aucun ordre, clés dans `.env` jamais versionnées
+- **Verify:** `grep -n "bun run observe" README.md`
+- **Expected:** README cohérent avec la CLI | **Time:** 3 min | **Difficulty:** 2
+- **Traces:** SC14 | **Phase:** GREEN
+
+## Consistency Report
+
+- Critères de spec couverts : 14/14 (SC1–SC14 tracés dans les tâches ci-dessus).
+- Affordances breadboard couvertes : 9/9 (K1→T16, F1→T6, P1→T4, A1→T9, A2→T5, A3→T15, U1→T13, R1→T14, M1→T17).
+- Tâches sans trace spec : 0. Exemptions : RG-A/B/C (sentinelles de process, sans trace produit).
+- Invariant transversal : `src/domain/**` inchangé — aucune tâche ne modifie le domaine ; vérifié par le critère SC12 (statique) et le test « loadConfig S1 inchangé » (T12).
+
+## Task Seeding Blueprint
+
+<!-- Used by /implement to seed TaskCreate calls on session start.
+     Format: T{n} | agent-instance | blockedBy | subject
+     blockedBy refs T-numbers within this list (not session task IDs).
+     Agent instances are named (tester-A/B, backend-dev-A/B/C/D/E, doc-writer-A)
+     so parallel tasks map to distinct spawned agents.
+     Seed in wave order; within a wave all rows are parallel (∥). -->
+
+### Wave 1 — no deps, 4 agents ∥
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T1 | tester-A | — | translation |
+| T2 | tester-A | — | translation |
+| T3 | tester-A | — | translation |
+| T6 | backend-dev-E | — | fixtures |
+| T7 | tester-B | — | http |
+| T8 | tester-B | — | http |
+| T10 | tester-C | — | e2e |
+| T11 | tester-C | — | secrets |
+| T12 | tester-C | — | secrets |
+
+### Wave 2 — after Wave 1 (RED complet), 3 agents ∥
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| RG-A | tester-A | T1,T2,T3 | gate |
+| RG-B | tester-B | T7,T8 | gate |
+| RG-C | tester-C | T10,T11,T12 | gate |
+
+### Wave 3 — after Wave 2, 3 agents ∥
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T4 | backend-dev-A | RG-A | contract |
+| T9 | backend-dev-B | RG-B | http |
+| T16 | backend-dev-D | RG-C | config |
+
+### Wave 4 — after Wave 3, 2 agents ∥
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T5 | backend-dev-A | T4 | parser |
+| T13 | backend-dev-C | T4,RG-C | orchestration |
+| T15 | backend-dev-D | T4,T6,RG-C | replay |
+
+### Wave 5 — after Wave 4, 1 agent
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T14 | backend-dev-C | T13 | render |
+
+### Wave 6 — after Wave 5, 1 agent
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T17 | backend-dev-C | T5,T9,T13,T14,T15,T16,T6 | orchestration |
+
+### Wave 7 — after Wave 6, 1 agent
+
+| Task | Agent instance | blockedBy | Subject |
+|------|---------------|-----------|---------|
+| T18 | doc-writer-A | T17 | docs |
+
+## Task IDs
+
+<!-- Generated by /plan. IDs canoniques T{n}/RG-* (stables, définis par le Task Seeding Blueprint ci-dessus).
+     Le harnais de session ne fournit pas d'IDs persistants : /implement re-seed les tâches depuis
+     le blueprint au démarrage de session (après /compact) et les ré-attache via ce tableau. -->
+- T1: seed-from-blueprint — translation
+- T2: seed-from-blueprint — translation
+- T3: seed-from-blueprint — translation
+- T4: seed-from-blueprint — contract
+- T5: seed-from-blueprint — parser
+- T6: seed-from-blueprint — fixtures
+- T7: seed-from-blueprint — http
+- T8: seed-from-blueprint — http
+- T9: seed-from-blueprint — http
+- T10: seed-from-blueprint — e2e
+- T11: seed-from-blueprint — secrets
+- T12: seed-from-blueprint — secrets
+- T13: seed-from-blueprint — orchestration
+- T14: seed-from-blueprint — render
+- T15: seed-from-blueprint — replay
+- T16: seed-from-blueprint — config
+- T17: seed-from-blueprint — orchestration
+- T18: seed-from-blueprint — docs
+- RG-A/RG-B/RG-C: seed-from-blueprint — gate
