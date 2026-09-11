@@ -56,7 +56,11 @@ export function snapshotIndex(root: string, destination: string): number {
 export function historyArguments(root: string): string[] | null {
   const head = git(root, ['rev-parse', '--verify', 'HEAD'], true).toString().trim()
   if (!head) return null
-  const args = ['git', pathToFileURL(root).href, '--branch=HEAD']
+  // TruffleHog mangles POSIX-style file URLs on Windows (file:///G:/… → G:/G:/…)
+  // and rejects bare paths; only file://<drive>:/… clones correctly there.
+  const repoUri =
+    process.platform === 'win32' ? `file://${root.replaceAll('\\', '/')}` : pathToFileURL(root).href
+  const args = ['git', repoUri, '--branch=HEAD']
   const upstream = git(root, ['rev-parse', '--verify', '@{upstream}'], true).toString().trim()
   if (!upstream) return args
   const base = git(root, ['merge-base', head, upstream], true).toString().trim()
