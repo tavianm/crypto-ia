@@ -8,7 +8,7 @@ date: 2026-09-11
 
 ## Problem
 
-Le socle (S0) démarre en `shadow` mais ne calcule rien : aucune valuation, aucune proposition, aucun journal. La roadmap (`docs/roadmap.md`, S1) fixe la première capacité utile : produire une **simulation reproductible hors ligne** de la boucle observation → proposition de rééquilibrage, sans connexion externe. C'est le premier code de domaine du dépôt : il établit les conventions (types, montants exacts, journal versionné) que S2 (ingestion read-only) et les règles de risque réutiliseront.
+Le socle (S0) démarre en `shadow` mais ne calcule rien : aucune valorisation, aucune allocation cible, aucun journal. La roadmap (`docs/roadmap.md`, S1) fixe la première capacité utile : produire une **simulation reproductible hors ligne** de la boucle observation → proposition de rééquilibrage, sans connexion externe. C'est le premier code de domaine du dépôt : il établit les conventions (types, montants exacts, journal versionné) que S2 (ingestion read-only) et les règles de risque réutiliseront.
 
 L'impact est observable : sans S1, impossible de vérifier une proposition de rééquilibrage de bout en bout, ni de rejouer un résultat à l'identique — donc aucune base de confiance avant tout branchement réel.
 

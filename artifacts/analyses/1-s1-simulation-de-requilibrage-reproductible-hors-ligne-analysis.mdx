@@ -1,0 +1,96 @@
+---
+title: "Analyse S1 : simulation de rééquilibrage reproductible hors ligne"
+description: "Approches d'architecture pour la première couche de domaine : types exacts, valorisation déterministe, propositions simulées, journal rejouable."
+---
+
+## Source
+
+Issue #1 — « S1 : simulation de rééquilibrage reproductible hors ligne », dérivée de `docs/roadmap.md` S1. Citation : « Produire une simulation reproductible hors ligne » — « le même jeu d'entrée et la même politique produisent le même résultat, les erreurs d'unité et données manquantes sont refusées, et aucun code ne peut envoyer d'ordre. »
+
+## Problem
+
+Le dépôt ne contient qu'une frontière de configuration (`src/config.ts`, figée, shadow-only) et un point d'entrée d'affichage (`src/main.ts`). Aucune notion de domaine n'existe : pas de types d'actifs, de montants, de prix, de snapshots, pas de valorisation, pas d'allocation cible, pas de journal. Toute tranche ultérieure (S2 ingestion, règles de risque, explications) dépend de ces fondations.
+
+## Outcome
+
+Rejouer un jeu de données synthétiques versionné produit, à l'identique : une valorisation du portefeuille, l'écart à une allocation cible configurée, des propositions de rééquilibrage simulées avec hypothèses de frais explicites, et un journal lisible des entrées, refus et résultats. Le tout hors ligne, sans chemin d'ordre, avec refus explicites des données invalides. (Contrat détaillé : frame #1, spec à venir.)
+
+## Appetite
+
+Une tranche unique, livrée en une PR (quelques jours). Le périmètre est borné par les critères d'acceptation de l'issue ; pas d'itération exploratoire prévue.
+
+## Shapes
+
+> **Diagram :** sidecar `1-{slug}-shapes.html` non généré — le plugin forge n'est pas installé dans cet environnement ; à régénérer après installation. Les trois shapes sont décrites ci-dessous.
+
+### Shape 1 : domaine en modules purs (couche domaine + cas d'usage)
+
+`src/domain/` héberge les types et fonctions pures par capacité : `portfolio` (actifs, montants, prix, snapshots, validation aux frontières du domaine), `valuation` (valorisation déterministe), `allocation` (cible + écart), `simulation` (propositions + frais), `journal` (entrées versionnées, refus, résultats). `src/app/simulate-rebalance.ts` orchestre le cas d'usage (kebab-case, verbe d'abord) en fonctions pures : données déjà chargées → valoriser → comparer → proposer → journaliser → rapport. La lecture du fichier de jeu synthétique reste de la composition : `src/main.ts` charge et parse, puis passe les données au cas d'usage — l'I/O ne rentre pas dans le domaine ni dans la couche applicative. Zéro dépendance runtime.
+
+**Trade-offs :**
+- Pro : correspondance directe avec les règles de dépendance de l'ADR-0001 ; fonctions pures testables avec entrées contrôlées ; conventions établies pour S2+ ; pas de dépendance à vérifier.
+- Con : structure initiale plus lourde qu'un script ; demande de discipline sur les frontières entre capacités dès le premier jour.
+
+**Rough scope :** M
+
+### Shape 2 : script de simulation unique
+
+Un `src/simulate.ts` auto-contenu : types locaux, calculs, rapport, tout inline.
+
+**Trade-offs :**
+- Pro : la livraison la plus rapide possible ; zéro cérémonie.
+- Con : viole les règles de dépendance et de capacité de l'ADR-0001 ; frontières invérifiables ; aucune convention réutilisable — S2 devrait réécrire ou casser ; la revue ne peut pas distinguer capacité et transport.
+
+**Rough scope :** S
+
+### Shape 3 : cœur événementiel d'emblée
+
+Dès S1, un modèle événementiel complet : enveloppe d'événement versionnée (`eventId`, `schemaVersion`, `observedAt`, `source`…), journal événement-sourcé, projection de l'état portefeuille par réduction des événements.
+
+**Trade-offs :**
+- Pro : rapproche S1 du contrat d'événement cible décrit dans `docs/architecture/overview.md` ; rejeu natif ; prépare NATS/journal durable (S4).
+- Con : machinerie de versionnage et de projection avant tout consommateur réel ; risque de généralisation spéculative ; appétit S1 (une tranche) dépassé ; les critères d'acceptation n'exigent qu'un journal lisible et un rejeu déterministe du calcul, pas un store événementiel.
+
+**Rough scope :** L
+
+## Fit Check
+
+> **Diagram :** sidecar `1-{slug}-data-flow.html` non généré — même contrainte forge que ci-dessus ; à régénérer plus tard.
+
+**Shape 1 retenue, en absorbant une contrainte de Shape 3 :** le domaine en modules purs porte la boucle complète S1, et le journal adopte dès maintenant les champs d'identification du contrat d'événement cible (`schemaVersion`, identifiant, horodatage, source) sans le store événementiel ni les projections. Ce compromis satisfait : rejeu déterministe (fonctions pures + jeu versionné), refus explicites (validation aux frontières du domaine), aucun chemin d'ordre (le domaine n'expose que des propositions typées), ADR-0001 (capacités séparées, adaptateurs absents du cœur).
+
+**Shapes éliminées :** Shape 2 (viole les frontières documentées, sans retour) ; Shape 3 (appétit L pour une tranche M, généralisation avant consommateur — ses champs de contrat sont repris dans le journal de Shape 1).
+
+## Décisions techniques signalées pour la spec
+
+Issues de l'analyse et des trois revues (documentation, produit, architecture) :
+
+1. **Montants = value objects, pas de `bigint` nu.** Un `Amount` lié à l'actif (`{ asset, units }` en unités entières `bigint`, métadonnées `decimals` par actif) ; toute arithmétique et conversion passe par des fonctions pures exigeant ces métadonnées — mélanger deux échelles (satoshis, wei) doit être une erreur de type ou un refus explicite, pas une compilation silencieuse. Zéro dépendance runtime ajoutée (l'alternative « librairie décimale » est écartée pour S1 : usage couvert par des unités entières explicites, et toute dépendance devra de toute façon suivre la convention de vérification d'usage/licence).
+2. **Prix = unités entières + `decimals`, jamais de flottants parsés.** `JSON.parse` corrompt déjà un prix en notation décimale ; les jeux de données portent les prix en chaînes/entiers convertis par fonctions pures testées. Devise de cote unique validée ; tout actif détenu sans prix disponible est un refus explicite. Les prix vivent dans `src/domain/portfolio.ts` avec les snapshots.
+3. **Déterminisme pratique.** Aucune horloge murale dans les sorties comparées : les horodatages (`observedAt`) proviennent des données d'entrée ; le journal porte `schemaVersion`, identifiant, source et `policyVersion` (version de la politique d'allocation/frais rejouée), plus une empreinte des entrées pour rendre l'identité du rejeu vérifiable. Tri stable des actifs, encodage canonique des montants en chaînes (la sérialisation JSON directe de `bigint` lève une exception).
+4. **Arrondi déterministe.** Contrat explicite de conversion cible fractionnaire → unités entières (mode d'arrondi fixé, traitement de la poussière, arrondi des frais), testé comme frontière.
+5. **Étiquetage « simulé ».** Marqueur explicite (`kind`/`simulated`) sur propositions, entrées de journal et rapport, pour distinguer sans ambiguïté les sorties shadow des futurs événements d'exécution.
+6. **Allocation cible et frais = données de politique versionnées dans le code** (objet de politique avec `policyVersion`), pas d'extension de `src/config.ts` : la frontière de configuration reste shadow-only et inchangée.
+7. **Absence de chemin d'ordre vérifiable.** Zéro dépendance runtime + aucun import réseau/HTTP dans `src/domain` et `src/app`, contrôlé en revue (le grep anti-pattern de l'ADR vise `packages/domain/src` ; sa portée sera mise à jour vers `src/domain` quand le code atterrit, comme l'ADR lui-même le prévoit).
+
+## Fichiers impactés (prévision)
+
+| Fichier | Action | Rôle |
+| --- | --- | --- |
+| `src/domain/portfolio.ts` | création | types actif/montant/prix/snapshot, value objects, validation aux frontières |
+| `src/domain/valuation.ts` | création | valorisation déterministe |
+| `src/domain/allocation.ts` | création | politique de cible versionnée + écart |
+| `src/domain/simulation.ts` | création | propositions + frais simulés, étiquetage simulé |
+| `src/domain/journal.ts` | création | entrées versionnées (`schemaVersion`, `policyVersion`, empreinte), refus, résultats |
+| `src/domain/index.ts` | création | exports publics du domaine |
+| `src/app/simulate-rebalance.ts` | création | cas d'usage orchestrateur (pur, données déjà chargées) |
+| `src/main.ts` | modification | composition : charger le jeu, appeler le cas d'usage, afficher le rapport |
+| `tests/domain/*.test.ts` | création | tests des fonctions pures : unités, prix, données manquantes, arrondi |
+| `tests/simulate-rebalance.test.ts` | création | test bout en bout : deux exécutions, rapport identique, refus traversant |
+| `tests/fixtures/s1-synthetic-portfolio.json` | création | jeu de données synthétiques versionné (format : unresolved concern) |
+
+## Unresolved concerns
+
+- Sidecars forge (`shapes`, `data-flow`) non générés — plugin forge absent de l'environnement ; à régénérer après installation.
+- Format du rapport lisible (texte seul, JSON + texte) à trancher en spec.
+- Format du fixture (`s1-synthetic-portfolio.json`) et son emplacement définitif (`tests/fixtures/` partagé ou dossier de données) à trancher en spec si le runtime doit le relire pour la démonstration.
